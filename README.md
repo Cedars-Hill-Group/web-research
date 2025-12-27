@@ -98,6 +98,18 @@ Scraping from the TUI
 - Use **g** in the TUI to scrape the currently-open page; scraped pages are staged in-session and committed using **c** (or saved&finished with **f**).
 - The in-page 'mark' widget and hotkey have been removed; scraping is explicit via the TUI or programmatically using `fetch_html(driver, url)`.
 
+### TUI Quick Reference (Keybindings) 🔧
+
+- **g** — Scrape the currently-open page (stage it in-session)
+- **l** — List scraped pages in the preview pane
+- **c** — Commit scraped pages to disk (writes per-page markdown + raw HTML)
+- **e** — Edit the selected scraped item using your `$EDITOR` (Notepad on Windows)
+- **d** — Delete the selected scraped item from the session
+- **f** — Save & finish (commit then exit)
+- **q** — Quit the TUI without saving
+
+Tip: Use **l** to view staged pages and preview them before editing or deleting; use `fetch_html(driver, url)` for programmatic/headless captures.
+
 Merge tool
 - After you have scraped files, run:
 
