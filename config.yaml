@@ -1,0 +1,29 @@
+# config.yaml
+google:
+  api_key: 'AIzaSyDfGumvGDzhMRdbH89ncrtRoGChccsOPU0'
+  cx: '80965d42098504797'
+
+scrape:
+  max_links: 50
+  allow_external: false
+  headless: false
+  user_agent: "Mozilla/5.0 CopilotResearchBot/1.0"
+
+storage:
+  base_dir: "data/companies"
+
+filters:
+  include_paths:
+    - "/about"
+    - "/investors"
+    - "/news"
+    - "/solutions"
+    - "/transactions"
+
+cleaning:
+  remove_selectors:
+    - "script"
+    - "style"
+    - "nav"
+    - "footer"
+  collapse_whitespace: true
