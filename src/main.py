@@ -161,12 +161,6 @@ def run():
             tui.company = name
             # indicate that this TUI is sharing the driver provided by the batch loop
             tui._shared_driver = True
-            # prompt for focus when running batch (allow blank to skip)
-            try:
-                focus = input("Enter focus for this company (leave blank to skip): ").strip()
-                tui.company_focus = focus or None
-            except Exception:
-                tui.company_focus = None
 
             tui.filters = cfg.get("filters", {})
 
@@ -174,6 +168,31 @@ def run():
 
             print("  Launching TUI; press 'g' to scrape the current page, 'c' to commit scraped pages, or 'f' to save and finish this company, then close the TUI to continue batch.")
             tui.run()
+
+            # prompt for focus and firm_type after scraping is complete
+            try:
+                focus = input("Enter focus for this company (leave blank to skip): ").strip()
+                firm_type = input("Enter firm type for this company (leave blank to skip): ").strip()
+                
+                # Update TUI instance for any future commits
+                tui.company_focus = focus or None
+                tui.company_firm_type = firm_type or None
+                
+                # Update already-saved markdown files if values were provided
+                if focus or firm_type:
+                    from pathlib import Path
+                    from .store import company_dirs, safe_slug, update_metadata_in_files
+                    dirs = company_dirs('data/companies', name)
+                    updates = {}
+                    if focus:
+                        updates['focus'] = focus
+                    if firm_type:
+                        updates['firm_type'] = firm_type
+                    count = update_metadata_in_files(dirs['md'], updates)
+                    if count > 0:
+                        print(f"  Updated metadata in {count} file(s).")
+            except Exception as e:
+                print(f"  Error updating metadata: {e}")
 
             # mark as processed (we launched and completed the TUI)
             processed_rows.append(row)
@@ -253,17 +272,37 @@ def run():
             tui.sites = sites
             tui.driver = driver
             tui.company = company
-            # prompt for focus for single company
-            try:
-                focus = input("Enter focus for this company (leave blank to skip): ").strip()
-                tui.company_focus = focus or None
-            except Exception:
-                tui.company_focus = None
 
             tui.filters = cfg.get("filters", {})
 
             global_tui = tui
             tui.run()
+
+            # prompt for focus and firm_type after scraping is complete
+            try:
+                focus = input("Enter focus for this company (leave blank to skip): ").strip()
+                firm_type = input("Enter firm type for this company (leave blank to skip): ").strip()
+                
+                # Update TUI instance
+                tui.company_focus = focus or None
+                tui.company_firm_type = firm_type or None
+                
+                # Update already-saved markdown files if values were provided
+                if focus or firm_type:
+                    from pathlib import Path
+                    from .store import company_dirs, safe_slug, update_metadata_in_files
+                    dirs = company_dirs('data/companies', company)
+                    updates = {}
+                    if focus:
+                        updates['focus'] = focus
+                    if firm_type:
+                        updates['firm_type'] = firm_type
+                    count = update_metadata_in_files(dirs['md'], updates)
+                    if count > 0:
+                        print(f"  Updated metadata in {count} file(s).")
+            except Exception as e:
+                print(f"  Error updating metadata: {e}")
+
             # close the shared driver now that the interactive session ended
             try:
                 from .browser import close_driver

@@ -34,15 +34,17 @@ def write_markdown(dir_path: Path, slug: str, md: str, meta: dict) -> Path:
     path.write_text(content, encoding="utf-8")
     return path
 
-def default_metadata(website: str, focus: str | None = None) -> dict:
+def default_metadata(website: str, focus: str | None = None, company: str | None = None, firm_type: str | None = None) -> dict:
     """Return default metadata for a captured page.
 
     Fields:
       - website: normalized site root (scheme://host/)
       - focus: optional user-provided focus value
+      - company: the company name as input by user or from companies.csv
+      - firm_type: optional firm type classification
       - date: UTC timestamp
 
-    Note: removed keys: company, notes, tags, version, city, state (city/state removed per request).
+    Note: removed keys: notes, tags, version, city, state (city/state removed per request).
     """
     # normalize website root
     ws = website or ""
@@ -59,7 +61,53 @@ def default_metadata(website: str, focus: str | None = None) -> dict:
         ws = str(website)
 
     return {
+        "company": company,
         "website": ws,
         "date": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "focus": focus,
+        "firm_type": firm_type,
     }
+
+def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
+    """Update metadata fields in existing markdown files.
+    
+    Args:
+        md_dir: Path to directory containing markdown files
+        updates: Dict of metadata fields to update (e.g., {"focus": "value", "firm_type": "value"})
+    
+    Returns:
+        Number of files updated
+    """
+    if not md_dir.exists():
+        return 0
+    
+    updated_count = 0
+    for md_file in md_dir.glob("*.md"):
+        try:
+            text = md_file.read_text(encoding="utf-8")
+            
+            # Parse existing front matter
+            if text.startswith("---"):
+                parts = text.split("---", 2)
+                if len(parts) >= 3:
+                    import yaml
+                    try:
+                        meta = yaml.safe_load(parts[1]) or {}
+                    except Exception:
+                        meta = {}
+                    body = parts[2]
+                    
+                    # Update metadata with new values
+                    for key, value in updates.items():
+                        if value is not None:  # Only update if value is provided
+                            meta[key] = value
+                    
+                    # Write back updated file
+                    fm = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
+                    content = f"---\n{fm}---{body}"
+                    md_file.write_text(content, encoding="utf-8")
+                    updated_count += 1
+        except Exception:
+            continue
+    
+    return updated_count

@@ -28,6 +28,8 @@ def choose_match(name: str, candidates: list[str]) -> str | None:
     if not candidates:
         return None
     best = difflib.get_close_matches(name, candidates, n=1, cutoff=THRESHOLD)
+    close = difflib.get_close_matches(name, candidates, n=5, cutoff=THRESHOLD/2)
+
     if best:
         b = best[0]
         resp = input(f"Found close match in DB: '{b}' for '{name}'. Use it? (y/n): ").strip().lower()
@@ -35,7 +37,7 @@ def choose_match(name: str, candidates: list[str]) -> str | None:
             return b
     # fallback: ask user to pick from list or none
     print("No suitable automatic match. Candidates:")
-    for i, c in enumerate(candidates, 1):
+    for i, c in enumerate(close, 1):
         print(f"  {i}. {c}")
     resp = input("Enter number to choose existing, 'n' for new, or 's' to skip: ").strip().lower()
     if resp == "s":
@@ -44,8 +46,8 @@ def choose_match(name: str, candidates: list[str]) -> str | None:
         return None
     try:
         idx = int(resp) - 1
-        if 0 <= idx < len(candidates):
-            return candidates[idx]
+        if 0 <= idx < len(close):
+            return close[idx]
     except Exception:
         pass
     return None
@@ -117,8 +119,8 @@ def append_markdown_to_company(src: Path, dst_file: Path) -> bool:
     if fingerprint and fingerprint in dst_text:
         return False
 
-    # Extract metadata from source file (if present)
-    src_meta, _ = _parse_front_matter(text)
+    # Extract metadata and body from source file (if present)
+    src_meta, src_body = _parse_front_matter(text)
 
     # Ensure dst dir exists
     dst_file.parent.mkdir(parents=True, exist_ok=True)
@@ -134,17 +136,18 @@ def append_markdown_to_company(src: Path, dst_file: Path) -> bool:
         dst_meta, dst_body = _parse_front_matter(dst_text)
         if not dst_meta:
             # create base metadata if missing
-            dst_meta = {"company": company_name}
+            dst_meta = {}
 
         # If there is a date in the body (not metadata), prefer it and remove it from the body
         import re
         if "date" not in dst_meta:
-            # look for ISO date/time or YYYY-MM-DD in the body
-            m = re.search(r"(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z?)?)", dst_body)
+            # look for ISO date/time or YYYY-MM-DD in the body, handling markdown formatting (bold, italics, etc.)
+            # This regex strips out common markdown formatting like **, *, __, _, ~~, etc. around dates
+            m = re.search(r"(?:[*_~`]{{1,3}})?(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z?)?)(?:[*_~`]{{1,3}})?", dst_body)
             if m:
                 dst_meta["date"] = m.group(1)
-                # remove the matched occurrence (first)
-                dst_body = re.sub(re.escape(m.group(1)), "", dst_body, count=1)
+                # remove the entire matched occurrence including any formatting (first occurrence)
+                dst_body = re.sub(re.escape(m.group(0)), "", dst_body, count=1)
 
         # merge fields from src_meta into dst_meta, but preserve certain keys
         for k, v in (src_meta or {}).items():
@@ -174,8 +177,8 @@ def append_markdown_to_company(src: Path, dst_file: Path) -> bool:
         # write back the possibly updated front matter and existing body
         _write_with_front_matter(dst_file, dst_meta, dst_body)
     else:
-        # create new file with merged metadata (src_meta preferred)
-        meta = {"company": company_name}
+        # create new file with merged metadata (src_meta preferred, but exclude company field)
+        meta = {}
         if src_meta:
             for k, v in src_meta.items():
                 if k == "company":
@@ -183,10 +186,10 @@ def append_markdown_to_company(src: Path, dst_file: Path) -> bool:
                 meta[k] = v
         _write_with_front_matter(dst_file, meta, "\n")
 
-    # append the content
+    # append the content (body only, without front matter)
     with dst_file.open("a", encoding="utf-8") as fh:
         fh.write("\n\n<!-- appended from: {} -->\n\n".format(src.name))
-        fh.write(text)
+        fh.write(src_body)
     return True
 
 
@@ -249,12 +252,23 @@ def main():
             existing.append(target_file.stem)
 
         # append files into target file
+        appended_count = 0
         for f in mdfiles:
             appended = append_markdown_to_company(f, target_file)
             if appended:
                 print(f"  Appended {f.name} -> {target_file.name}")
+                appended_count += 1
             else:
                 print(f"  Skipped (duplicate) {f.name} -> {target_file.name}")
+
+        # Remove the company data folder if any files were successfully merged
+        if appended_count > 0:
+            try:
+                import shutil
+                shutil.rmtree(comp_dir)
+                print(f"  Removed data folder: {comp_dir}")
+            except Exception as e:
+                print(f"  Warning: Could not remove data folder {comp_dir}: {e}")
 
     print("\nMerge complete.")
 
