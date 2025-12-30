@@ -229,8 +229,9 @@ def append_markdown_to_company(src: Path, dst_file: Path, company_display: str |
         else:
             dst_meta[k] = v
 
-    if derived_company:
-        dst_meta["company"] = derived_company
+    # Do NOT include company field in destination file metadata
+    # (company is determined by directory structure and file location)
+    dst_meta.pop("company", None)
 
     # Build the addition block and insert under Basic Underwriting
     addition = f"<!-- appended from: {src.name} -->\n\n{src_body}".strip() + "\n"

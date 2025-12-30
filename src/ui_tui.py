@@ -7,6 +7,7 @@ import tempfile
 import os
 import subprocess
 import sys
+from datetime import datetime, UTC
 
 from .scrape import fetch_html
 from .browser import close_driver
@@ -408,7 +409,7 @@ class HybridTUI(App):
                 slug = safe_slug(p.get('url'))
                 try:
                     html_path = write_html(dirs['html'], slug, p.get('html', ''))
-                    meta = default_metadata(p.get('url'), focus=self.company_focus, company=save_company, firm_type=self.company_firm_type, source=self.company_source)
+                    meta = default_metadata(p.get('url'), focus=self.company_focus, firm_type=self.company_firm_type, source=self.company_source)
                     md_path = write_markdown(dirs['md'], slug, p.get('md', ''), meta)
                     p['saved'] = True
                     p['html_path'] = str(html_path)
@@ -424,7 +425,7 @@ class HybridTUI(App):
             # write combined session file
             try:
                 from datetime import datetime
-                session_slug = f"session-{safe_slug(datetime.utcnow().isoformat(timespec='seconds'))}"
+                session_slug = f"session-{safe_slug(datetime.now(UTC).isoformat(timespec='seconds'))}"
                 combined_md = "\n\n---\n\n".join([c for c in combined_parts if c])
                 # only create a combined session file if more than one page was saved
                 if combined_md and len(combined_parts) > 1:

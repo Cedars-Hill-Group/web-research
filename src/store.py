@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 import yaml
-from datetime import datetime
+from datetime import datetime, UTC
 
 def safe_slug(text: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9\-]+", "-", text.strip().lower())
@@ -67,18 +67,17 @@ def pretty_company_name(name: str | None) -> str | None:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned.title() if cleaned else None
 
-def default_metadata(website: str, focus: str | None = None, company: str | None = None, firm_type: str | None = None, source: str | None = None) -> dict:
+def default_metadata(website: str, focus: str | None = None, firm_type: str | None = None, source: str | None = None) -> dict:
     """Return default metadata for a captured page.
 
     Fields:
       - website: normalized site root (scheme://host/)
       - focus: optional user-provided focus value
-      - company: the company name as input by user or from companies.csv
       - firm_type: optional firm type classification
       - source: optional source classification
       - date: UTC timestamp
 
-    Note: removed keys: notes, tags, version, city, state (city/state removed per request).
+    Note: removed keys: notes, tags, version, city, state, company (company is determined by directory structure).
     """
     # normalize website root
     ws = website or ""
@@ -95,9 +94,8 @@ def default_metadata(website: str, focus: str | None = None, company: str | None
         ws = str(website)
 
     return {
-        "company": pretty_company_name(company),
         "website": ws,
-        "date": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "date": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "focus": normalize_list_field(focus),
         "firm_type": normalize_list_field(firm_type),
         "source": normalize_list_field(source),
@@ -137,9 +135,15 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                         if isinstance(meta.get(key), str) and "," in meta.get(key, ""):
                             meta[key] = normalize_list_field(meta.get(key))
 
+                    # Preserve existing date if the file has one
+                    existing_date = meta.get("date")
+
                     # Update metadata with new values
                     for key, value in updates.items():
                         if value is None:
+                            continue
+                        # Preserve existing date if it exists
+                        if key == "date" and existing_date:
                             continue
                         if key == "company":
                             meta[key] = pretty_company_name(value)
@@ -147,6 +151,10 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                             meta[key] = normalize_list_field(value)
                         else:
                             meta[key] = value
+                    
+                    # Ensure date is preserved in the metadata
+                    if existing_date:
+                        meta["date"] = existing_date
                     
                     # Write back updated file
                     fm = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
