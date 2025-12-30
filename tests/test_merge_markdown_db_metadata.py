@@ -48,6 +48,6 @@ def test_merge_inserts_metadata_when_missing(tmp_path):
     appended = append_markdown_to_company(src_md, dst)
     assert appended
     meta = _read_front(dst)
-    assert meta.get('company') == 'src'
+    assert meta.get('company') == 'Beta'
     # merged focus present
     assert meta.get('focus') == 'press'

@@ -34,6 +34,39 @@ def write_markdown(dir_path: Path, slug: str, md: str, meta: dict) -> Path:
     path.write_text(content, encoding="utf-8")
     return path
 
+
+def normalize_list_field(value):
+    """Return a normalized field value that becomes a YAML list when comma-separated.
+
+    - If the input is a string containing commas, split on commas and trim items.
+    - If the input is already a list, trim items and drop empties.
+    - If the input is a single string without commas, return the trimmed string.
+    - For None/empty values, return None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, list):
+        items = [str(v).strip() for v in value if str(v).strip()]
+        return items if items else None
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        parts = [p.strip() for p in raw.split(',') if p.strip()]
+        if len(parts) >= 2:
+            return parts
+        return parts[0] if parts else None
+    return value
+
+
+def pretty_company_name(name: str | None) -> str | None:
+    """Convert a company identifier into Title Case words without dashes/underscores."""
+    if not name:
+        return None
+    cleaned = re.sub(r"[-_]+", " ", str(name))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned.title() if cleaned else None
+
 def default_metadata(website: str, focus: str | None = None, company: str | None = None, firm_type: str | None = None) -> dict:
     """Return default metadata for a captured page.
 
@@ -61,11 +94,11 @@ def default_metadata(website: str, focus: str | None = None, company: str | None
         ws = str(website)
 
     return {
-        "company": company,
+        "company": pretty_company_name(company),
         "website": ws,
         "date": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "focus": focus,
-        "firm_type": firm_type,
+        "focus": normalize_list_field(focus),
+        "firm_type": normalize_list_field(firm_type),
     }
 
 def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
@@ -97,9 +130,20 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                         meta = {}
                     body = parts[2]
                     
+                    # Normalize existing focus/firm_type if they were stored comma-separated
+                    for key in ("focus", "firm_type"):
+                        if isinstance(meta.get(key), str) and "," in meta.get(key, ""):
+                            meta[key] = normalize_list_field(meta.get(key))
+
                     # Update metadata with new values
                     for key, value in updates.items():
-                        if value is not None:  # Only update if value is provided
+                        if value is None:
+                            continue
+                        if key == "company":
+                            meta[key] = pretty_company_name(value)
+                        elif key in ("focus", "firm_type"):
+                            meta[key] = normalize_list_field(value)
+                        else:
                             meta[key] = value
                     
                     # Write back updated file

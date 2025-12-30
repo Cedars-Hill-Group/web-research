@@ -77,8 +77,9 @@ class HybridTUI(App):
             site = event.item.data
             try:
                 self.driver.get(site["link"])
-
-                self.company = site["title"].split()[0]
+                # Preserve user-provided company when set; otherwise fall back to the search result title
+                if not self.company:
+                    self.company = site.get("title")
                 try:
                     self.notify(f"Opened {site['link']} in browser")
                 except Exception:

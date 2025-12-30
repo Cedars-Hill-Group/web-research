@@ -11,16 +11,63 @@ existing company markdown file in the DB (using fuzzy matching), or create a new
 Usage: python scripts/merge_markdown_db.py
 """
 import difflib
+import re
 from pathlib import Path
 from datetime import datetime
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from src.store import safe_slug
+from src.store import safe_slug, pretty_company_name, normalize_list_field
 
 SRC_DIR = Path("data/companies")
 DB_DIR = Path("C:\\Obsidian\\Josh's Garden\\Companies")
+TEMPLATE_PATH = Path("C:\\Obsidian\\Josh's Garden\\templates\\company template.md")
 
 THRESHOLD = 0.75
+
+
+def _clean_company_filename(name: str, db_dir: Path) -> Path:
+    """Return a Title Case filename with spaces (no dashes) that is safe for the filesystem."""
+    pretty = pretty_company_name(name) or safe_slug(name)
+    pretty = re.sub(r'[<>:"/\\|?*]+', " ", pretty)
+    pretty = re.sub(r"\s+", " ", pretty).strip() or "Company"
+
+    candidate = pretty
+    idx = 1
+    while True:
+        suffix = "" if idx == 1 else f" {idx}"
+        filename = f"{candidate}{suffix}.md"
+        path = db_dir / filename
+        if not path.exists():
+            return path
+        idx += 1
+
+
+def _insert_under_heading(body: str, heading: str, addition: str) -> str:
+    """Insert the addition under the given markdown heading (case-insensitive)."""
+    if not addition.strip():
+        return body
+
+    lines = body.splitlines()
+    target_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.lstrip('#').strip()
+        if stripped.lower() == heading.lower():
+            target_idx = i
+            break
+
+    addition_block = addition.strip()
+
+    if target_idx is None:
+        # create the heading if missing
+        prefix = "\n\n" if body.strip() else ""
+        return f"{body.rstrip()}{prefix}## {heading}\n\n{addition_block}\n"
+
+    insert_at = target_idx + 1
+    while insert_at < len(lines) and lines[insert_at].strip() == "":
+        insert_at += 1
+
+    new_lines = lines[:insert_at] + ["", addition_block, ""] + lines[insert_at:]
+    return "\n".join(new_lines).strip() + "\n"
 
 
 def choose_match(name: str, candidates: list[str]) -> str | None:
@@ -103,14 +150,14 @@ def _parse_date(value: str) -> "datetime | None":
         return None
 
 
-def append_markdown_to_company(src: Path, dst_file: Path) -> bool:
+def append_markdown_to_company(src: Path, dst_file: Path, company_display: str | None = None) -> bool:
     """Append src markdown into dst_file. Returns True if appended, False if skipped (duplicate).
 
     Behavior changes:
-      - If dst_file exists and contains YAML front matter, update/merge metadata from src
-        (src fields overwrite/add to dst metadata except 'company' and 'created_at').
-      - If dst_file exists and has no front matter, insert merged metadata at the top of the file.
-    Deduplication: we compare a short fingerprint (first 200 chars of src) against dst content.
+      - Uses a company template (if present) for new files and inserts scraped content under the
+        "Basic Underwriting" heading.
+      - Normalizes focus/firm_type to YAML lists when comma-separated.
+      - Stores company names in Title Case with spaces (no dashes) in metadata and filenames.
     """
     text = src.read_text(encoding="utf-8")
     fingerprint = "\n".join(text.splitlines()[:10]).strip()[:200]
@@ -121,75 +168,77 @@ def append_markdown_to_company(src: Path, dst_file: Path) -> bool:
 
     # Extract metadata and body from source file (if present)
     src_meta, src_body = _parse_front_matter(text)
+    src_body = (src_body or "").lstrip()
 
-    # Ensure dst dir exists
-    dst_file.parent.mkdir(parents=True, exist_ok=True)
+    # Determine a human-friendly company name
+    derived_company = pretty_company_name(company_display or (src_meta or {}).get("company"))
+    if not derived_company:
+        if src.parent.name == 'markdown' and src.parent.parent:
+            derived_company = pretty_company_name(src.parent.parent.name)
+        else:
+            derived_company = pretty_company_name(src.parent.name)
 
-    # determine company name from expected layout: company/markdown/file.md
-    if src.parent.name == 'markdown' and src.parent.parent:
-        company_name = src.parent.parent.name
+    # Load destination metadata/body, preferring the template when creating a new file
+    if (not dst_file.exists() or not dst_text.strip()) and TEMPLATE_PATH.exists():
+        try:
+            tpl_text = TEMPLATE_PATH.read_text(encoding="utf-8")
+            dst_meta, dst_body = _parse_front_matter(tpl_text)
+        except Exception:
+            dst_meta, dst_body = ({}, dst_text)
     else:
-        company_name = src.parent.name
-
-    if dst_file.exists():
-        # read existing meta (if any) and merge
         dst_meta, dst_body = _parse_front_matter(dst_text)
-        if not dst_meta:
-            # create base metadata if missing
-            dst_meta = {}
 
-        # If there is a date in the body (not metadata), prefer it and remove it from the body
-        import re
-        if "date" not in dst_meta:
-            # look for ISO date/time or YYYY-MM-DD in the body, handling markdown formatting (bold, italics, etc.)
-            # This regex strips out common markdown formatting like **, *, __, _, ~~, etc. around dates
-            m = re.search(r"(?:[*_~`]{{1,3}})?(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z?)?)(?:[*_~`]{{1,3}})?", dst_body)
-            if m:
-                dst_meta["date"] = m.group(1)
-                # remove the entire matched occurrence including any formatting (first occurrence)
-                dst_body = re.sub(re.escape(m.group(0)), "", dst_body, count=1)
+    dst_meta = dst_meta or {}
+    dst_body = dst_body or ""
 
-        # merge fields from src_meta into dst_meta, but preserve certain keys
-        for k, v in (src_meta or {}).items():
-            if k in ("company", "created_at"):
-                continue
-            if k == "date" and "date" in dst_meta:
-                # preserve the older date (the minimum)
-                dst_d = _parse_date(dst_meta.get("date"))
-                src_d = _parse_date(v)
-                if dst_d and src_d:
-                    # normalize to comparable timestamps (handle naive vs aware)
-                    from datetime import timezone
-                    def _ts(dt):
-                        if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
-                        return dt.timestamp()
-                    src_ts = _ts(src_d)
-                    dst_ts = _ts(dst_d)
-                    chosen = dst_d if dst_ts <= src_ts else src_d
-                    # record as ISO string (preserve date-first ordering)
-                    dst_meta["date"] = chosen.isoformat()
-                else:
-                    # if parsing failed, prefer existing dst_meta value
-                    dst_meta["date"] = dst_meta.get("date")
+    # If there is a date in the body (not metadata), prefer it and remove it from the body
+    if "date" not in dst_meta:
+        m = re.search(r"(?:[*_~`]{{1,3}})?(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z?)?)(?:[*_~`]{{1,3}})?", dst_body)
+        if m:
+            dst_meta["date"] = m.group(1)
+            dst_body = re.sub(re.escape(m.group(0)), "", dst_body, count=1)
+
+    # Normalize existing focus/firm_type values
+    for key in ("focus", "firm_type"):
+        if key in dst_meta:
+            dst_meta[key] = normalize_list_field(dst_meta.get(key))
+
+    # merge fields from src_meta into dst_meta, but preserve created_at and prefer older date
+    for k, v in (src_meta or {}).items():
+        if k in ("created_at",):
+            continue
+        if k == "company":
+            continue
+        if k == "date" and "date" in dst_meta:
+            dst_d = _parse_date(dst_meta.get("date"))
+            src_d = _parse_date(v)
+            if dst_d and src_d:
+                from datetime import timezone
+                def _ts(dt):
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt.timestamp()
+                src_ts = _ts(src_d)
+                dst_ts = _ts(dst_d)
+                chosen = dst_d if dst_ts <= src_ts else src_d
+                dst_meta["date"] = chosen.isoformat()
             else:
-                dst_meta[k] = v
-        # write back the possibly updated front matter and existing body
-        _write_with_front_matter(dst_file, dst_meta, dst_body)
-    else:
-        # create new file with merged metadata (src_meta preferred, but exclude company field)
-        meta = {}
-        if src_meta:
-            for k, v in src_meta.items():
-                if k == "company":
-                    continue
-                meta[k] = v
-        _write_with_front_matter(dst_file, meta, "\n")
+                dst_meta["date"] = dst_meta.get("date")
+        elif k in ("focus", "firm_type"):
+            dst_meta[k] = normalize_list_field(v)
+        else:
+            dst_meta[k] = v
 
-    # append the content (body only, without front matter)
-    with dst_file.open("a", encoding="utf-8") as fh:
-        fh.write("\n\n<!-- appended from: {} -->\n\n".format(src.name))
-        fh.write(src_body)
+    if derived_company:
+        dst_meta["company"] = derived_company
+
+    # Build the addition block and insert under Basic Underwriting
+    addition = f"<!-- appended from: {src.name} -->\n\n{src_body}".strip() + "\n"
+    dst_body = _insert_under_heading(dst_body, "Basic Underwriting", addition)
+
+    # Ensure dst dir exists and write updated file with front matter
+    dst_file.parent.mkdir(parents=True, exist_ok=True)
+    _write_with_front_matter(dst_file, dst_meta, dst_body)
     return True
 
 
@@ -236,25 +285,15 @@ def main():
         if match:
             target_file = db / f"{match}.md"
         else:
-            # new company -> create new markdown file using a slug filename
-            slug = safe_slug(company_name)
-            target_file = db / f"{slug}.md"
-            if target_file.exists():
-                # if collision on slug, add numeric suffix
-                i = 1
-                while True:
-                    candidate = db / f"{slug}-{i}.md"
-                    if not candidate.exists():
-                        target_file = candidate
-                        break
-                    i += 1
+            # new company -> create new markdown file using Title Case with spaces
+            target_file = _clean_company_filename(company_name, db)
             print(f"Creating new company entry in DB: {target_file.name}")
             existing.append(target_file.stem)
 
         # append files into target file
         appended_count = 0
         for f in mdfiles:
-            appended = append_markdown_to_company(f, target_file)
+            appended = append_markdown_to_company(f, target_file, company_display=company_name)
             if appended:
                 print(f"  Appended {f.name} -> {target_file.name}")
                 appended_count += 1
