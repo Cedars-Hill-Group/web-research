@@ -67,7 +67,7 @@ def pretty_company_name(name: str | None) -> str | None:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned.title() if cleaned else None
 
-def default_metadata(website: str, focus: str | None = None, company: str | None = None, firm_type: str | None = None) -> dict:
+def default_metadata(website: str, focus: str | None = None, company: str | None = None, firm_type: str | None = None, source: str | None = None) -> dict:
     """Return default metadata for a captured page.
 
     Fields:
@@ -75,6 +75,7 @@ def default_metadata(website: str, focus: str | None = None, company: str | None
       - focus: optional user-provided focus value
       - company: the company name as input by user or from companies.csv
       - firm_type: optional firm type classification
+      - source: optional source classification
       - date: UTC timestamp
 
     Note: removed keys: notes, tags, version, city, state (city/state removed per request).
@@ -99,6 +100,7 @@ def default_metadata(website: str, focus: str | None = None, company: str | None
         "date": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "focus": normalize_list_field(focus),
         "firm_type": normalize_list_field(firm_type),
+        "source": normalize_list_field(source),
     }
 
 def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
@@ -130,8 +132,8 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                         meta = {}
                     body = parts[2]
                     
-                    # Normalize existing focus/firm_type if they were stored comma-separated
-                    for key in ("focus", "firm_type"):
+                    # Normalize existing focus/firm_type/source if they were stored comma-separated
+                    for key in ("focus", "firm_type", "source"):
                         if isinstance(meta.get(key), str) and "," in meta.get(key, ""):
                             meta[key] = normalize_list_field(meta.get(key))
 
@@ -141,7 +143,7 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                             continue
                         if key == "company":
                             meta[key] = pretty_company_name(value)
-                        elif key in ("focus", "firm_type"):
+                        elif key in ("focus", "firm_type", "source"):
                             meta[key] = normalize_list_field(value)
                         else:
                             meta[key] = value

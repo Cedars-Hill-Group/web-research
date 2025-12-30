@@ -169,17 +169,19 @@ def run():
             print("  Launching TUI; press 'g' to scrape the current page, 'c' to commit scraped pages, or 'f' to save and finish this company, then close the TUI to continue batch.")
             tui.run()
 
-            # prompt for focus and firm_type after scraping is complete
+            # prompt for focus, firm_type, and source after scraping is complete
             try:
                 focus = input("Enter focus for this company (leave blank to skip): ").strip()
                 firm_type = input("Enter firm type for this company (leave blank to skip): ").strip()
+                source = input("Enter source for this company (leave blank to skip): ").strip()
                 
                 # Update TUI instance for any future commits
                 tui.company_focus = focus or None
                 tui.company_firm_type = firm_type or None
+                tui.company_source = source or None
                 
                 # Update already-saved markdown files if values were provided
-                if focus or firm_type:
+                if focus or firm_type or source:
                     from pathlib import Path
                     from .store import company_dirs, safe_slug, update_metadata_in_files
                     dirs = company_dirs('data/companies', name)
@@ -188,6 +190,8 @@ def run():
                         updates['focus'] = focus
                     if firm_type:
                         updates['firm_type'] = firm_type
+                    if source:
+                        updates['source'] = source
                     count = update_metadata_in_files(dirs['md'], updates)
                     if count > 0:
                         print(f"  Updated metadata in {count} file(s).")

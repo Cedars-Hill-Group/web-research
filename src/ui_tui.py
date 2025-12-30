@@ -42,6 +42,7 @@ class HybridTUI(App):
         self.company = None
         self.company_focus: str | None = None
         self.company_firm_type: str | None = None
+        self.company_source: str | None = None
         self.filters = {}
         self.collected_pages = []  # scraped pages collected in-memory per session
         self._lock = threading.Lock()
@@ -407,7 +408,7 @@ class HybridTUI(App):
                 slug = safe_slug(p.get('url'))
                 try:
                     html_path = write_html(dirs['html'], slug, p.get('html', ''))
-                    meta = default_metadata(p.get('url'), focus=self.company_focus, company=save_company, firm_type=self.company_firm_type)
+                    meta = default_metadata(p.get('url'), focus=self.company_focus, company=save_company, firm_type=self.company_firm_type, source=self.company_source)
                     md_path = write_markdown(dirs['md'], slug, p.get('md', ''), meta)
                     p['saved'] = True
                     p['html_path'] = str(html_path)
