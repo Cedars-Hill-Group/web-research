@@ -209,21 +209,26 @@ def append_markdown_to_company(src: Path, dst_file: Path, company_display: str |
             continue
         if k == "company":
             continue
-        if k == "date" and "date" in dst_meta:
-            dst_d = _parse_date(dst_meta.get("date"))
-            src_d = _parse_date(v)
-            if dst_d and src_d:
-                from datetime import timezone
-                def _ts(dt):
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return dt.timestamp()
-                src_ts = _ts(src_d)
-                dst_ts = _ts(dst_d)
-                chosen = dst_d if dst_ts <= src_ts else src_d
-                dst_meta["date"] = chosen.isoformat()
+        if k == "date":
+            if "date" not in dst_meta:
+                # If destination doesn't have a date, use source's date
+                dst_meta["date"] = v
             else:
-                dst_meta["date"] = dst_meta.get("date")
+                # Both have dates, preserve the older one
+                dst_d = _parse_date(dst_meta.get("date"))
+                src_d = _parse_date(v)
+                if dst_d and src_d:
+                    from datetime import timezone
+                    def _ts(dt):
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        return dt.timestamp()
+                    src_ts = _ts(src_d)
+                    dst_ts = _ts(dst_d)
+                    chosen = dst_d if dst_ts <= src_ts else src_d
+                    dst_meta["date"] = chosen.isoformat()
+                else:
+                    dst_meta["date"] = dst_meta.get("date") or v
         elif k in ("focus", "firm_type"):
             dst_meta[k] = normalize_list_field(v)
         else:
@@ -232,6 +237,11 @@ def append_markdown_to_company(src: Path, dst_file: Path, company_display: str |
     # Do NOT include company field in destination file metadata
     # (company is determined by directory structure and file location)
     dst_meta.pop("company", None)
+
+    # Ensure date is always set (use current date if not already present)
+    if "date" not in dst_meta:
+        from datetime import datetime, UTC
+        dst_meta["date"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
     # Build the addition block and insert under Basic Underwriting
     addition = f"<!-- appended from: {src.name} -->\n\n{src_body}".strip() + "\n"
