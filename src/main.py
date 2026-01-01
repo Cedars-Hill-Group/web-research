@@ -11,11 +11,116 @@ from datetime import datetime, UTC
 from .browser import get_driver
 from .search import search_official_site
 from .ui_tui import HybridTUI
+from .store import company_dirs, write_markdown, default_metadata, safe_slug
 import shutil
-from datetime import datetime
+from pathlib import Path
 
 app = Flask(__name__)
 global_tui = None   # holds the active TUI instance
+
+
+def bypass_scraping_and_add_to_db(company_name: str) -> bool:
+    """Allow user to manually enter company data and add it directly to the database without scraping.
+    
+    Args:
+        company_name: The name of the company
+        
+    Returns:
+        True if data was successfully added, False otherwise
+    """
+    print(f"\n--- Adding {company_name} to database without scraping ---")
+    
+    # Prompt for website
+    website = input("Enter company website (or press Enter to skip): ").strip()
+    if not website:
+        website = ""
+    
+    # Prompt for focus
+    focus = input("Enter focus (or press Enter to skip): ").strip()
+    
+    # Prompt for firm type
+    firm_type = input("Enter firm type (or press Enter to skip): ").strip()
+    
+    # Prompt for source
+    source = input("Enter source (or press Enter to skip): ").strip()
+    
+    # Prompt for content/notes
+    content = input("Enter any notes or content about the company (or press Enter to skip): ").strip()
+    
+    # Confirm before saving
+    print(f"\nAbout to save:")
+    print(f"  Company: {company_name}")
+    print(f"  Website: {website if website else '(none)'}")
+    print(f"  Focus: {focus if focus else '(none)'}")
+    print(f"  Firm Type: {firm_type if firm_type else '(none)'}")
+    print(f"  Source: {source if source else '(none)'}")
+    if content:
+        print(f"  Notes: {content[:100]}...")
+    
+    confirm = input("\nProceed with saving? (y/n): ").strip().lower()
+    if confirm != "y":
+        print("Cancelled.")
+        return False
+    
+    try:
+        dirs = company_dirs('data/companies', company_name)
+        
+        # Create metadata
+        meta = default_metadata(
+            website=website,
+            focus=focus or None,
+            firm_type=firm_type or None,
+            source=source or None
+        )
+        
+        # Write markdown file with the content/notes
+        slug = safe_slug(f"{company_name}-manual")
+        write_markdown(dirs['md'], slug, content, meta)
+        
+        print(f"✓ Successfully saved {company_name} to database.")
+        return True
+    except Exception as e:
+        print(f"✗ Error saving to database: {e}")
+        return False
+
+
+def save_company_metadata_if_no_scraping(company_name: str, focus: str | None = None, firm_type: str | None = None, source: str | None = None) -> bool:
+    """If user provided metadata but no pages were scraped, create a placeholder markdown file
+    with that metadata so the company is still added to the database.
+    
+    Args:
+        company_name: The name of the company
+        focus: Optional focus value
+        firm_type: Optional firm type value
+        source: Optional source value
+        
+    Returns:
+        True if a placeholder was created, False otherwise
+    """
+    # Only create placeholder if there's at least one metadata field provided
+    if not (focus or firm_type or source):
+        return False
+    
+    try:
+        dirs = company_dirs('data/companies', company_name)
+        meta = default_metadata(
+            website="",
+            focus=focus,
+            firm_type=firm_type,
+            source=source
+        )
+        
+        # Create a placeholder markdown file with a note that no pages were scraped
+        placeholder_content = "(No pages scraped - metadata only)"
+        slug = safe_slug(f"{company_name}-metadata")
+        write_markdown(dirs['md'], slug, placeholder_content, meta)
+        
+        print(f"  Created metadata-only entry for {company_name}.")
+        return True
+    except Exception as e:
+        print(f"  Failed to create metadata entry: {e}")
+        return False
+
 
 
 def run_server():
@@ -144,10 +249,15 @@ def run():
                 print(f"     {s['snippet']}\n")
 
             if prompt_each:
-                choice = input("  Are these results satisfactory? (y/n/q to quit batch): ").strip().lower()
+                choice = input("  Are these results satisfactory? (y/n/s for skip scraping/q to quit batch): ").strip().lower()
                 if choice == "q":
                     print("Exiting batch early.")
                     break
+                if choice == "s":
+                    # Skip scraping and add manually to database
+                    if bypass_scraping_and_add_to_db(name):
+                        processed_rows.append(row)
+                    continue
                 if choice != "y":
                     print("  Skipping this company.")
                     continue
@@ -181,6 +291,9 @@ def run():
                 tui.company_firm_type = firm_type or None
                 tui.company_source = source or None
                 
+                # Check if any pages were scraped
+                pages_scraped = len(tui.collected_pages) > 0
+                
                 # Update already-saved markdown files if values were provided
                 if focus or firm_type or source:
                     from pathlib import Path
@@ -196,6 +309,11 @@ def run():
                     count = update_metadata_in_files(dirs['md'], updates)
                     if count > 0:
                         print(f"  Updated metadata in {count} file(s).")
+                    
+                    # If no pages were scraped but metadata was provided, create a metadata-only entry
+                    if not pages_scraped:
+                        if save_company_metadata_if_no_scraping(name, focus or None, firm_type or None, source or None):
+                            pass  # Success message already printed
             except Exception as e:
                 print(f"  Error updating metadata: {e}")
 
@@ -270,9 +388,18 @@ def run():
             print(f"{i}. {s['title']} - {s['link']}")
             print(f"   {s['snippet']}\n")
 
-        choice = input("Are these results satisfactory? (y/n/q): ").strip().lower()
+        choice = input("Are these results satisfactory? (y/n/s for skip scraping/q): ").strip().lower()
 
-        if choice == "y":
+        if choice == "s":
+            # Skip scraping and add manually to database
+            if bypass_scraping_and_add_to_db(company):
+                print("\nOkay, let's continue.\n")
+                continue
+            else:
+                print("\nOkay, let's try again.\n")
+                continue
+
+        elif choice == "y":
             tui = HybridTUI()
             tui.sites = sites
             tui.driver = driver
@@ -294,6 +421,9 @@ def run():
                 tui.company_firm_type = firm_type or None
                 tui.company_source = source or None
                 
+                # Check if any pages were scraped
+                pages_scraped = len(tui.collected_pages) > 0
+                
                 # Update already-saved markdown files if values were provided
                 if focus or firm_type or source:
                     from pathlib import Path
@@ -308,9 +438,14 @@ def run():
                         updates['source'] = source
                     count = update_metadata_in_files(dirs['md'], updates)
                     if count > 0:
-                        print(f"  Updated metadata in {count} file(s).")
+                        print(f"Updated metadata in {count} file(s).")
+                    
+                    # If no pages were scraped but metadata was provided, create a metadata-only entry
+                    if not pages_scraped:
+                        if save_company_metadata_if_no_scraping(company, focus or None, firm_type or None, source or None):
+                            pass  # Success message already printed
             except Exception as e:
-                print(f"  Error updating metadata: {e}")
+                print(f"Error updating metadata: {e}")
 
             # close the shared driver now that the interactive session ended
             try:
