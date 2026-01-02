@@ -70,10 +70,16 @@ def _insert_under_heading(body: str, heading: str, addition: str) -> str:
     return "\n".join(new_lines).strip() + "\n"
 
 
-def choose_match(name: str, candidates: list[str]) -> str | None:
-    """Return a chosen candidate stem (filename without .md) or None."""
+def choose_match(name: str, candidates: list[str]) -> tuple[str | None, str | None]:
+    """Return a tuple of (chosen_candidate_stem, custom_company_name).
+    
+    Returns:
+        - (candidate_stem, None): Use existing company with that stem
+        - (None, custom_name): Create new company with custom name
+        - (None, None): Skip this company
+    """
     if not candidates:
-        return None
+        return (None, None)
     best = difflib.get_close_matches(name, candidates, n=1, cutoff=THRESHOLD)
     close = difflib.get_close_matches(name, candidates, n=5, cutoff=THRESHOLD/2)
 
@@ -81,23 +87,27 @@ def choose_match(name: str, candidates: list[str]) -> str | None:
         b = best[0]
         resp = input(f"Found close match in DB: '{b}' for '{name}'. Use it? (y/n): ").strip().lower()
         if resp == "y":
-            return b
+            return (b, None)
     # fallback: ask user to pick from list or none
     print("No suitable automatic match. Candidates:")
     for i, c in enumerate(close, 1):
         print(f"  {i}. {c}")
     resp = input("Enter number to choose existing, 'n' for new, or 's' to skip: ").strip().lower()
     if resp == "s":
-        return None
+        return (None, None)
     if resp == "n":
-        return None
+        # Prompt for the company name to save in the database
+        custom_name = input(f"Enter company name for database (or press Enter to use '{name}'): ").strip()
+        if not custom_name:
+            custom_name = name
+        return (None, custom_name)
     try:
         idx = int(resp) - 1
         if 0 <= idx < len(close):
-            return close[idx]
+            return (close[idx], None)
     except Exception:
         pass
-    return None
+    return (None, None)
 
 
 def _parse_front_matter(text: str) -> tuple[dict, str]:
@@ -292,14 +302,21 @@ def main():
 
         print(f"\nProcessing company: {company_name} (from {comp_dir})")
 
-        match = choose_match(company_name, existing)
+        match, custom_name = choose_match(company_name, existing)
         if match:
+            # Use existing company
             target_file = db / f"{match}.md"
-        else:
-            # new company -> create new markdown file using Title Case with spaces
-            target_file = _clean_company_filename(company_name, db)
+        elif custom_name:
+            # Create new company with custom name
+            target_file = _clean_company_filename(custom_name, db)
             print(f"Creating new company entry in DB: {target_file.name}")
             existing.append(target_file.stem)
+            # Use the custom name for metadata
+            company_name = custom_name
+        else:
+            # Skip this company
+            print(f"  Skipped company: {company_name}")
+            continue
 
         # append files into target file
         appended_count = 0
