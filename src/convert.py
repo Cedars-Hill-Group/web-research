@@ -1,4 +1,5 @@
-from bs4 import BeautifulSoup, Comment
+from __future__ import annotations
+from bs4 import BeautifulSoup, Comment, NavigableString
 from readability import Document
 import markdownify
 import re
@@ -10,31 +11,53 @@ DEFAULT_BOILERPLATE_SELECTORS = [
     "nav",
     "[role='banner']",
     "[role='navigation']",
+    "[role='complementary']",
     ".nav",
     ".navbar",
+    ".navigation",
     ".breadcrumb",
     ".breadcrumbs",
     ".cookie",
     ".cookie-banner",
     ".cookie-consent",
+    ".cookie-notice",
+    ".gdpr",
     ".signup",
     ".subscribe",
     ".newsletter",
     ".sidebar",
+    ".side-bar",
     "aside",
     ".advert",
+    ".advertisement",
     ".ads",
+    ".ad",
     ".promo",
+    ".promotion",
     ".share",
     ".social",
+    ".social-share",
+    ".social-media",
     ".comments",
     ".comment",
     ".site-footer",
     ".site-header",
+    ".popup",
+    ".modal",
+    ".overlay",
+    ".menu",
+    ".search-form",
+    ".search-bar",
+    "#search",
+    ".related-posts",
+    ".related-articles",
+    ".author-bio",
+    ".tags",
+    ".categories",
 ]
 
 # Regex for class/id names that often indicate non-content elements
-BOILERPLATE_CLASS_RE = re.compile(r"\b(sidebar|nav|header|footer|cookie|banner|promo|advert|ads|social|share|subscribe|signup|comment|breadcrumbs?)\b", re.I)
+BOILERPLATE_CLASS_RE = re.compile(r"\b(sidebar|side-bar|nav|navigation|menu|header|footer|cookie|gdpr|banner|promo|promotion|advert|advertisement|ads?|social|share|subscribe|signup|comment|breadcrumbs?|popup|modal|overlay|search|author-bio|tags|categories|related)\b", re.I)
 
 # Defaults for selectors to retain (sections we generally want to keep)
 DEFAULT_RETAIN_SELECTORS = [
@@ -53,7 +76,140 @@ DEFAULT_RETAIN_SELECTORS = [
 ]
 
 # Regex to detect classes/ids that indicate content we should retain
-RETAIN_CLASS_RE = re.compile(r"\b(team|press|news|member|staff|profile)\b", re.I)
+RETAIN_CLASS_RE = re.compile(r"\b(team|press|news|member|staff|profile|about|service|product|feature|benefit|solution|overview|description|content|main|article|post|entry)\b", re.I)
+
+
+def calculate_text_density(element) -> float:
+    """Calculate text density as ratio of text length to tag count.
+    
+    Higher density indicates more actual content vs. markup/navigation.
+    """
+    try:
+        # Get all text
+        text = element.get_text(separator=" ", strip=True)
+        text_len = len(text)
+        
+        if text_len == 0:
+            return 0.0
+        
+        # Count tags
+        tag_count = len(element.find_all())
+        
+        # Avoid division by zero
+        if tag_count == 0:
+            tag_count = 1
+        
+        # Calculate density
+        density = text_len / tag_count
+        
+        return density
+    except Exception:
+        return 0.0
+
+
+def find_content_by_density(soup, min_density: float = 30.0, min_text_length: int = 200) -> BeautifulSoup | None:
+    """Find the main content container by analyzing text density.
+    
+    Args:
+        soup: BeautifulSoup object
+        min_density: Minimum text density threshold
+        min_text_length: Minimum text length to consider
+        
+    Returns:
+        BeautifulSoup element with highest content density, or None
+    """
+    try:
+        # Common content container tags to check
+        content_candidates = []
+        
+        # Check semantic HTML5 tags first
+        for tag in ['main', 'article', '[role="main"]', '.main-content', '#main', '#content', '.content']:
+            elements = soup.select(tag)
+            for elem in elements:
+                text_len = len(elem.get_text(strip=True))
+                if text_len >= min_text_length:
+                    density = calculate_text_density(elem)
+                    content_candidates.append((density, text_len, elem))
+        
+        # Check divs and sections with high text density
+        for elem in soup.find_all(['div', 'section', 'article']):
+            text_len = len(elem.get_text(strip=True))
+            if text_len >= min_text_length:
+                density = calculate_text_density(elem)
+                if density >= min_density:
+                    content_candidates.append((density, text_len, elem))
+        
+        # Sort by density (primary) and text length (secondary)
+        if content_candidates:
+            content_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+            return content_candidates[0][2]
+        
+        return None
+    except Exception:
+        return None
+
+
+def extract_main_content_smart(html: str) -> str:
+    """Extract main content using multiple strategies with fallbacks.
+    
+    Strategies (in order):
+    1. Readability library (Mozilla's algorithm)
+    2. Semantic HTML5 tags (main, article)
+    3. Text density analysis
+    4. Full HTML (last resort)
+    """
+    soup = BeautifulSoup(html, "lxml")
+    
+    # Strategy 1: Try readability first
+    try:
+        doc = Document(html)
+        content = doc.summary(html_partial=True)
+        if content and len(content) > 200:
+            return content
+    except Exception:
+        pass
+    
+    # Strategy 2: Look for semantic HTML5 elements
+    try:
+        # Try <main> tag
+        main_tag = soup.find('main')
+        if main_tag:
+            text_len = len(main_tag.get_text(strip=True))
+            if text_len > 200:
+                return str(main_tag)
+        
+        # Try <article> tag
+        article_tag = soup.find('article')
+        if article_tag:
+            text_len = len(article_tag.get_text(strip=True))
+            if text_len > 200:
+                return str(article_tag)
+        
+        # Try role="main"
+        role_main = soup.find(attrs={"role": "main"})
+        if role_main:
+            text_len = len(role_main.get_text(strip=True))
+            if text_len > 200:
+                return str(role_main)
+    except Exception:
+        pass
+    
+    # Strategy 3: Text density analysis
+    try:
+        content_elem = find_content_by_density(soup, min_density=25.0, min_text_length=150)
+        if content_elem:
+            return str(content_elem)
+    except Exception:
+        pass
+    
+    # Strategy 4: Return full HTML (will be cleaned by clean_html)
+    return html
+
+
+def extract_main_content(html: str) -> str:
+    """Readability isolates primary article/content area."""
+    doc = Document(html)
+    return doc.summary(html_partial=True)
 
 
 def clean_html(html: str, remove_selectors: list[str] | None = None, collapse_whitespace: bool = True, use_readability: bool = True, retain_selectors: list[str] | None = None) -> str:
@@ -72,15 +228,15 @@ def clean_html(html: str, remove_selectors: list[str] | None = None, collapse_wh
     # Keep a copy of original HTML so we can restore small retained sections
     original_html = html
 
-    # Prefer the readability-extracted content when available and enabled
+    # Use smart content extraction with multiple strategies
     if use_readability:
         try:
-            main = extract_main_content(html)
-            # readability can sometimes return tiny fragments; fall back if too small
+            main = extract_main_content_smart(html)
+            # Only use extracted content if it's substantial
             if main and len(main) > 200:
                 html = main
         except Exception:
-            # if readability fails, continue with the original html
+            # if extraction fails, continue with the original html
             pass
 
     # parse both original and current HTML so we can bring in retained fragments if needed
@@ -220,10 +376,23 @@ def clean_markdown(md: str) -> str:
         r"^\s*Subscribe( to)?\s*$",
         r"^\s*Sign up\s*$",
         r"^\s*Follow (us|on)\s*$",
-        r"^\s*(Share|Share on)\s*$",
+        r"^\s*(Share|Share on|Share this)\s*$",
         r"^\s*©.*$",
         r"^\s*All rights reserved\.?$",
         r"^\s*(Privacy|Terms|Contact|Cookies?)\s*$",
+        r"^\s*Accept (all )?cookies\s*$",
+        r"^\s*Manage (your )?preferences\s*$",
+        r"^\s*Learn more\s*$",
+        r"^\s*Read more\s*$",
+        r"^\s*Close\s*$",
+        r"^\s*Menu\s*$",
+        r"^\s*Skip to (main )?content\s*$",
+        r"^\s*Home\s*$",
+        r"^\s*Search\s*$",
+        r"^\s*(Open|Close) (menu|navigation)\s*$",
+        r"^\s*\[.*?\]\s*$",  # Links like [Home] [About]
+        r"^\s*\|+\s*$",  # Separator lines
+        r"^\s*[-_=]{3,}\s*$",  # Separator lines
     ]
 
     lines = md.splitlines()
@@ -242,6 +411,12 @@ def clean_markdown(md: str) -> str:
         out_lines.append(ln.rstrip())
 
     clean = "\n".join(out_lines)
+
+    # Remove common image alt text that's navigation
+    clean = re.sub(r"!\[(?:Home|Menu|Search|Logo|Icon)\]\([^)]+\)", "", clean, flags=re.I)
+    
+    # Remove excessive list markers from navigation
+    clean = re.sub(r"(\n\s*[\*\-]\s*){5,}", "\n\n", clean)
 
     # collapse multiple blank lines to a maximum of two
     clean = re.sub(r"\n{3,}", "\n\n", clean)
