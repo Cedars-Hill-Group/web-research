@@ -237,32 +237,90 @@ def run():
 
         for name, row in companies:
             print(f"\nProcessing: {name}")
-            sites = search_official_site(name, max_results=3)
+            
+            # Search results loop - allow user to request more results
+            start_index = 1
+            sites = []
+            
+            while True:
+                # Fetch results (initial or additional)
+                if start_index == 1:
+                    sites = search_official_site(name, max_results=3, start_index=start_index)
+                else:
+                    # Fetch next batch of results
+                    more_sites = search_official_site(name, max_results=3, start_index=start_index)
+                    if more_sites:
+                        sites.extend(more_sites)
+                    else:
+                        print("  No more results available.")
+                        start_index -= 3  # Roll back for retry
+                        continue
 
-            if not sites:
-                print("  No results found. Skipping.")
-                continue
-
-            print("\n  Search results:")
-            for i, s in enumerate(sites, start=1):
-                print(f"  {i}. {s['title']} - {s['link']}")
-                print(f"     {s['snippet']}\n")
-
-            if prompt_each:
-                choice = input("  Are these results satisfactory? (y/n/s for skip scraping/q to quit batch): ").strip().lower()
-                if choice == "q":
-                    print("Exiting batch early.")
+                if not sites:
+                    print("  No results found. Skipping.")
                     break
-                if choice == "s":
-                    # Skip scraping and add manually to database
-                    if bypass_scraping_and_add_to_db(name):
-                        processed_rows.append(row)
-                    continue
-                if choice != "y":
-                    print("  Skipping this company.")
-                    continue
-            else:
-                print("  Auto-accepting first result for this company.")
+
+                # Display current results
+                print("\n  Search results:")
+                display_count = min(len(sites), start_index + 2)  # Show current batch
+                for i in range(start_index - 1, display_count):
+                    s = sites[i]
+                    print(f"  {i+1}. {s['title']} - {s['link']}")
+                    print(f"     {s['snippet']}\n")
+
+                if prompt_each:
+                    # Enhanced prompt with more options
+                    choice = input("  Options: (y)es to continue, (m)ore results, (x)skip company and delete from batch, (s)kip scraping but add manually, (q)uit batch: ").strip().lower()
+                    
+                    if choice == "q":
+                        print("Exiting batch early.")
+                        # Break out of both loops
+                        sites = None
+                        break
+                    
+                    elif choice == "x":
+                        # Skip company and mark for deletion from CSV
+                        print(f"  Skipping {name} and will remove from companies.csv.")
+                        processed_rows.append(row)  # Mark as processed so it gets removed
+                        sites = None
+                        break
+                    
+                    elif choice == "m":
+                        # Request more results
+                        start_index += 3
+                        if start_index > 91:  # Google Custom Search API limit
+                            print("  Reached maximum results (100). Can't fetch more.")
+                            start_index = 88  # Reset to last valid batch
+                            continue
+                        print("  Fetching more results...")
+                        continue
+                    
+                    elif choice == "s":
+                        # Skip scraping and add manually to database
+                        if bypass_scraping_and_add_to_db(name):
+                            processed_rows.append(row)
+                        sites = None
+                        break
+                    
+                    elif choice == "y":
+                        # Continue with scraping using current sites
+                        break
+                    
+                    else:
+                        print("  Invalid choice. Skipping this company.")
+                        sites = None
+                        break
+                else:
+                    print("  Auto-accepting first result for this company.")
+                    break
+            
+            # Check if we need to exit the main loop (quit was selected)
+            if prompt_each and choice == "q":
+                break
+            
+            # Skip to next company if no valid sites
+            if not sites:
+                continue
 
             tui = HybridTUI()
             # ensure shared browser driver is alive before assigning to TUI
@@ -377,27 +435,77 @@ def run():
             print("Exiting.")
             return
 
-        sites = search_official_site(company, max_results=3)
-
-        if not sites:
-            print("No results found. Try again.")
-            continue
-
-        print("\nSearch results:")
-        for i, s in enumerate(sites, start=1):
-            print(f"{i}. {s['title']} - {s['link']}")
-            print(f"   {s['snippet']}\n")
-
-        choice = input("Are these results satisfactory? (y/n/s for skip scraping/q): ").strip().lower()
-
-        if choice == "s":
-            # Skip scraping and add manually to database
-            if bypass_scraping_and_add_to_db(company):
-                print("\nOkay, let's continue.\n")
-                continue
+        # Search results loop - allow user to request more results
+        start_index = 1
+        sites = []
+        
+        while True:
+            # Fetch results (initial or additional)
+            if start_index == 1:
+                sites = search_official_site(company, max_results=3, start_index=start_index)
             else:
-                print("\nOkay, let's try again.\n")
+                # Fetch next batch of results
+                more_sites = search_official_site(company, max_results=3, start_index=start_index)
+                if more_sites:
+                    sites.extend(more_sites)
+                else:
+                    print("No more results available.")
+                    start_index -= 3  # Roll back for retry
+                    continue
+
+            if not sites:
+                print("No results found. Try again.")
+                break
+
+            # Display current results
+            print("\nSearch results:")
+            display_count = min(len(sites), start_index + 2)  # Show current batch
+            for i in range(start_index - 1, display_count):
+                s = sites[i]
+                print(f"{i+1}. {s['title']} - {s['link']}")
+                print(f"   {s['snippet']}\n")
+
+            choice = input("Options: (y)es to continue, (m)ore results, (s)kip scraping but add manually, (n)ew search, (q)uit: ").strip().lower()
+
+            if choice == "s":
+                # Skip scraping and add manually to database
+                if bypass_scraping_and_add_to_db(company):
+                    print("\nOkay, let's continue.\n")
+                else:
+                    print("\nOkay, let's try again.\n")
+                sites = None
+                break
+            
+            elif choice == "m":
+                # Request more results
+                start_index += 3
+                if start_index > 91:  # Google Custom Search API limit
+                    print("Reached maximum results (100). Can't fetch more.")
+                    start_index = 88  # Reset to last valid batch
+                    continue
+                print("Fetching more results...")
                 continue
+            
+            elif choice == "y":
+                # Continue with scraping using current sites
+                break
+            
+            elif choice == "n":
+                print("\nOkay, let's try again.\n")
+                sites = None
+                break
+            
+            elif choice == "q":
+                print("Exiting.")
+                return
+            
+            else:
+                print("Invalid input. Try again.")
+                continue
+        
+        # Skip to next company if no valid sites or user chose new search
+        if not sites:
+            continue
 
         elif choice == "y":
             tui = HybridTUI()
