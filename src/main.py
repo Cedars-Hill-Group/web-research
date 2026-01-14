@@ -428,16 +428,30 @@ def run():
 
         return
 
-    # Single mode fallback
+    # Single mode - allow multiple companies before updating database
+    print("\n=== Single Company Mode (Multiple Companies) ===")
+    print("Enter companies one at a time. After each company is processed,")
+    print("you'll be asked if you want to continue entering more companies.\n")
+    
+    processed_companies = []  # Track companies for later database update
+    
     while True:
         company = input("Enter company name (or 'q' to quit): ").strip()
         if company.lower() == "q":
             print("Exiting.")
+            # close the driver before exiting
+            try:
+                from .browser import close_driver
+                close_driver(driver)
+                print("Browser closed.")
+            except Exception:
+                pass
             return
 
         # Search results loop - allow user to request more results
         start_index = 1
         sites = []
+        choice = None
         
         while True:
             # Fetch results (initial or additional)
@@ -470,9 +484,10 @@ def run():
             if choice == "s":
                 # Skip scraping and add manually to database
                 if bypass_scraping_and_add_to_db(company):
-                    print("\nOkay, let's continue.\n")
+                    print("\nAdded manually.\n")
+                    processed_companies.append(company)
                 else:
-                    print("\nOkay, let's try again.\n")
+                    print("\nCancelled manual entry.\n")
                 sites = None
                 break
             
@@ -496,7 +511,14 @@ def run():
                 break
             
             elif choice == "q":
-                print("Exiting.")
+                print("\nExiting.")
+                # close the driver before exiting
+                try:
+                    from .browser import close_driver
+                    close_driver(driver)
+                    print("Browser closed.")
+                except Exception:
+                    pass
                 return
             
             else:
@@ -512,6 +534,7 @@ def run():
             tui.sites = sites
             tui.driver = driver
             tui.company = company
+            tui._shared_driver = True  # Keep driver open for next company
 
             tui.filters = cfg.get("filters", {})
 
@@ -555,33 +578,58 @@ def run():
             except Exception as e:
                 print(f"Error updating metadata: {e}")
 
-            # close the shared driver now that the interactive session ended
-            try:
-                from .browser import close_driver
-                close_driver(driver)
-                print("Browser closed.")
-            except Exception:
-                pass
+            # Keep track of processed company
+            processed_companies.append(company)
 
-            # offer to run the merge tool for any newly scraped markdown
-            try:
-                resp = input("Run merge tool to add markdown files to DB now? (y/n): ").strip().lower()
-                if resp == "y":
-                    subprocess.run([sys.executable, "scripts/merge_markdown_db.py"], check=False)
-            except Exception:
-                pass
-            break
+            # Ensure the driver is still alive for next company
+            driver = _ensure_driver_alive(driver, cfg["scrape"].get("user_agent"))
+
+            # Ask if user wants to continue with another company
+            continue_choice = input("\nContinue entering more companies? (y/n): ").strip().lower()
+            if continue_choice != "y":
+                print("\nFinished entering companies. Processing database...")
+                break
 
         elif choice == "n":
             print("\nOkay, let's try again.\n")
             continue
 
         elif choice == "q":
-            print("Exiting.")
+            print("\nExiting.")
+            # close the driver before exiting
+            try:
+                from .browser import close_driver
+                close_driver(driver)
+                print("Browser closed.")
+            except Exception:
+                pass
             return
 
         else:
             print("Invalid input. Returning to company prompt.\n")
+
+    # After all companies are processed, close the driver and offer to run merge tool
+    try:
+        from .browser import close_driver
+        close_driver(driver)
+        print("Browser closed.")
+    except Exception:
+        pass
+
+    # offer to run the merge tool for any newly scraped markdown
+    if processed_companies:
+        print(f"\nProcessed {len(processed_companies)} company/companies:")
+        for comp in processed_companies:
+            print(f"  - {comp}")
+        
+        try:
+            resp = input("\nRun merge tool to add markdown files to DB now? (y/n): ").strip().lower()
+            if resp == "y":
+                subprocess.run([sys.executable, "scripts/merge_markdown_db.py"], check=False)
+        except Exception:
+            pass
+    else:
+        print("No companies were processed.")
 
 if __name__ == "__main__":
     run()
