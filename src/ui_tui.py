@@ -44,6 +44,8 @@ class HybridTUI(App):
         self.company_focus: str | None = None
         self.company_firm_type: str | None = None
         self.company_source: str | None = None
+        self.company_prop_type: str | None = None
+        self.company_loan_type: str | None = None
         self.filters = {}
         self.collected_pages = []  # scraped pages collected in-memory per session
         self._lock = threading.Lock()
@@ -409,7 +411,14 @@ class HybridTUI(App):
                 slug = safe_slug(p.get('url'))
                 try:
                     html_path = write_html(dirs['html'], slug, p.get('html', ''))
-                    meta = default_metadata(p.get('url'), focus=self.company_focus, firm_type=self.company_firm_type, source=self.company_source)
+                    meta = default_metadata(
+                        p.get('url'),
+                        focus=self.company_focus,
+                        firm_type=self.company_firm_type,
+                        source=self.company_source,
+                        prop_type=self.company_prop_type,
+                        loan_type=self.company_loan_type,
+                    )
                     md_path = write_markdown(dirs['md'], slug, p.get('md', ''), meta)
                     p['saved'] = True
                     p['html_path'] = str(html_path)
@@ -429,7 +438,19 @@ class HybridTUI(App):
                 combined_md = "\n\n---\n\n".join([c for c in combined_parts if c])
                 # only create a combined session file if more than one page was saved
                 if combined_md and len(combined_parts) > 1:
-                    combined_path = write_markdown(dirs['md'], session_slug, combined_md, default_metadata(self.collected_pages[0].get('url'), focus=self.company_focus))
+                    combined_path = write_markdown(
+                        dirs['md'],
+                        session_slug,
+                        combined_md,
+                        default_metadata(
+                            self.collected_pages[0].get('url'),
+                            focus=self.company_focus,
+                            firm_type=self.company_firm_type,
+                            source=self.company_source,
+                            prop_type=self.company_prop_type,
+                            loan_type=self.company_loan_type,
+                        ),
+                    )
                 else:
                     combined_path = None
             except Exception:

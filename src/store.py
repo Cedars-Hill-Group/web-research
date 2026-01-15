@@ -67,7 +67,7 @@ def pretty_company_name(name: str | None) -> str | None:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned.title() if cleaned else None
 
-def default_metadata(website: str, focus: str | None = None, firm_type: str | None = None, source: str | None = None) -> dict:
+def default_metadata(website: str, focus: str | None = None, firm_type: str | None = None, source: str | None = None, prop_type: str | None = None, loan_type: str | None = None) -> dict:
     """Return default metadata for a captured page.
 
     Fields:
@@ -93,13 +93,25 @@ def default_metadata(website: str, focus: str | None = None, firm_type: str | No
     except Exception:
         ws = str(website)
 
-    return {
+    meta = {
         "website": ws,
         "date": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "focus": normalize_list_field(focus),
         "firm_type": normalize_list_field(firm_type),
         "source": normalize_list_field(source),
     }
+
+    # Only include prop_type when provided (user left blank -> omit field)
+    prop_val = normalize_list_field(prop_type)
+    if prop_val is not None:
+        meta["prop_type"] = prop_val
+
+    # Only include loan_type when provided (user left blank -> omit field)
+    loan_val = normalize_list_field(loan_type)
+    if loan_val is not None:
+        meta["loan_type"] = loan_val
+
+    return meta
 
 def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
     """Update metadata fields in existing markdown files.
@@ -130,8 +142,8 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                         meta = {}
                     body = parts[2]
                     
-                    # Normalize existing focus/firm_type/source if they were stored comma-separated
-                    for key in ("focus", "firm_type", "source"):
+                    # Normalize existing focus/firm_type/source/prop_type/loan_type if they were stored comma-separated
+                    for key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
                         if isinstance(meta.get(key), str) and "," in meta.get(key, ""):
                             meta[key] = normalize_list_field(meta.get(key))
 
@@ -147,7 +159,7 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                             continue
                         if key == "company":
                             meta[key] = pretty_company_name(value)
-                        elif key in ("focus", "firm_type", "source"):
+                        elif key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
                             meta[key] = normalize_list_field(value)
                         else:
                             meta[key] = value

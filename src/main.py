@@ -40,6 +40,12 @@ def bypass_scraping_and_add_to_db(company_name: str) -> bool:
     
     # Prompt for firm type
     firm_type = input("Enter firm type (or press Enter to skip): ").strip()
+
+    # Prompt for property type
+    prop_type = input("Enter property type (comma-separated for multiple, or press Enter to skip): ").strip()
+    
+    # Prompt for loan type
+    loan_type = input("Enter loan type (comma-separated for multiple, or press Enter to skip): ").strip()
     
     # Prompt for source
     source = input("Enter source (or press Enter to skip): ").strip()
@@ -54,6 +60,8 @@ def bypass_scraping_and_add_to_db(company_name: str) -> bool:
     print(f"  Focus: {focus if focus else '(none)'}")
     print(f"  Firm Type: {firm_type if firm_type else '(none)'}")
     print(f"  Source: {source if source else '(none)'}")
+    print(f"  Property Type: {prop_type if prop_type else '(none)'}")
+    print(f"  Loan Type: {loan_type if loan_type else '(none)'}")
     if content:
         print(f"  Notes: {content[:100]}...")
     
@@ -70,7 +78,9 @@ def bypass_scraping_and_add_to_db(company_name: str) -> bool:
             website=website,
             focus=focus or None,
             firm_type=firm_type or None,
-            source=source or None
+            source=source or None,
+            prop_type=prop_type or None,
+            loan_type=loan_type or None,
         )
         
         # Write markdown file with the content/notes
@@ -84,7 +94,7 @@ def bypass_scraping_and_add_to_db(company_name: str) -> bool:
         return False
 
 
-def save_company_metadata_if_no_scraping(company_name: str, focus: str | None = None, firm_type: str | None = None, source: str | None = None) -> bool:
+def save_company_metadata_if_no_scraping(company_name: str, focus: str | None = None, firm_type: str | None = None, source: str | None = None, prop_type: str | None = None, loan_type: str | None = None) -> bool:
     """If user provided metadata but no pages were scraped, create a placeholder markdown file
     with that metadata so the company is still added to the database.
     
@@ -98,7 +108,7 @@ def save_company_metadata_if_no_scraping(company_name: str, focus: str | None = 
         True if a placeholder was created, False otherwise
     """
     # Only create placeholder if there's at least one metadata field provided
-    if not (focus or firm_type or source):
+    if not (focus or firm_type or source or prop_type or loan_type):
         return False
     
     try:
@@ -107,7 +117,9 @@ def save_company_metadata_if_no_scraping(company_name: str, focus: str | None = 
             website="",
             focus=focus,
             firm_type=firm_type,
-            source=source
+            source=source,
+            prop_type=prop_type,
+            loan_type=loan_type,
         )
         
         # Create a placeholder markdown file with a note that no pages were scraped
@@ -342,18 +354,22 @@ def run():
             try:
                 focus = input("Enter focus for this company (leave blank to skip): ").strip()
                 firm_type = input("Enter firm type for this company (leave blank to skip): ").strip()
+                prop_type = input("Enter property type for this company (comma-separated for multiple, leave blank to skip): ").strip()
+                loan_type = input("Enter loan type for this company (comma-separated for multiple, leave blank to skip): ").strip()
                 source = input("Enter source for this company (leave blank to skip): ").strip()
                 
                 # Update TUI instance for any future commits
                 tui.company_focus = focus or None
                 tui.company_firm_type = firm_type or None
                 tui.company_source = source or None
+                tui.company_prop_type = prop_type or None
+                tui.company_loan_type = loan_type or None
                 
                 # Check if any pages were scraped
                 pages_scraped = len(tui.collected_pages) > 0
                 
                 # Update already-saved markdown files if values were provided
-                if focus or firm_type or source:
+                if focus or firm_type or source or prop_type or loan_type:
                     from pathlib import Path
                     from .store import company_dirs, safe_slug, update_metadata_in_files
                     dirs = company_dirs('data/companies', name)
@@ -362,6 +378,10 @@ def run():
                         updates['focus'] = focus
                     if firm_type:
                         updates['firm_type'] = firm_type
+                    if prop_type:
+                        updates['prop_type'] = prop_type
+                    if loan_type:
+                        updates['loan_type'] = loan_type
                     if source:
                         updates['source'] = source
                     count = update_metadata_in_files(dirs['md'], updates)
@@ -370,7 +390,7 @@ def run():
                     
                     # If no pages were scraped but metadata was provided, create a metadata-only entry
                     if not pages_scraped:
-                        if save_company_metadata_if_no_scraping(name, focus or None, firm_type or None, source or None):
+                        if save_company_metadata_if_no_scraping(name, focus or None, firm_type or None, source or None, prop_type or None, loan_type or None):
                             pass  # Success message already printed
             except Exception as e:
                 print(f"  Error updating metadata: {e}")
@@ -544,19 +564,24 @@ def run():
             # prompt for focus, firm_type, and source after scraping is complete
             try:
                 focus = input("Enter focus for this company (leave blank to skip): ").strip()
+                focus = input("Enter focus for this company (leave blank to skip): ").strip()
                 firm_type = input("Enter firm type for this company (leave blank to skip): ").strip()
+                prop_type = input("Enter property type for this company (comma-separated for multiple, leave blank to skip): ").strip()
+                loan_type = input("Enter loan type for this company (comma-separated for multiple, leave blank to skip): ").strip()
                 source = input("Enter source for this company (leave blank to skip): ").strip()
                 
                 # Update TUI instance
                 tui.company_focus = focus or None
                 tui.company_firm_type = firm_type or None
                 tui.company_source = source or None
+                tui.company_prop_type = prop_type or None
+                tui.company_loan_type = loan_type or None
                 
                 # Check if any pages were scraped
                 pages_scraped = len(tui.collected_pages) > 0
                 
                 # Update already-saved markdown files if values were provided
-                if focus or firm_type or source:
+                if focus or firm_type or source or prop_type or loan_type:
                     from pathlib import Path
                     from .store import company_dirs, safe_slug, update_metadata_in_files
                     dirs = company_dirs('data/companies', company)
@@ -565,6 +590,10 @@ def run():
                         updates['focus'] = focus
                     if firm_type:
                         updates['firm_type'] = firm_type
+                    if prop_type:
+                        updates['prop_type'] = prop_type
+                    if loan_type:
+                        updates['loan_type'] = loan_type
                     if source:
                         updates['source'] = source
                     count = update_metadata_in_files(dirs['md'], updates)
@@ -573,7 +602,7 @@ def run():
                     
                     # If no pages were scraped but metadata was provided, create a metadata-only entry
                     if not pages_scraped:
-                        if save_company_metadata_if_no_scraping(company, focus or None, firm_type or None, source or None):
+                        if save_company_metadata_if_no_scraping(company, focus or None, firm_type or None, source or None, prop_type or None, loan_type or None):
                             pass  # Success message already printed
             except Exception as e:
                 print(f"Error updating metadata: {e}")
