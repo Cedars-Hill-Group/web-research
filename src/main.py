@@ -459,14 +459,7 @@ def run():
         company = input("Enter company name (or 'q' to quit): ").strip()
         if company.lower() == "q":
             print("Exiting.")
-            # close the driver before exiting
-            try:
-                from .browser import close_driver
-                close_driver(driver)
-                print("Browser closed.")
-            except Exception:
-                pass
-            return
+            break
 
         # Search results loop - allow user to request more results
         start_index = 1
@@ -532,14 +525,7 @@ def run():
             
             elif choice == "q":
                 print("\nExiting.")
-                # close the driver before exiting
-                try:
-                    from .browser import close_driver
-                    close_driver(driver)
-                    print("Browser closed.")
-                except Exception:
-                    pass
-                return
+                break
             
             else:
                 print("Invalid input. Try again.")
@@ -624,14 +610,7 @@ def run():
 
         elif choice == "q":
             print("\nExiting.")
-            # close the driver before exiting
-            try:
-                from .browser import close_driver
-                close_driver(driver)
-                print("Browser closed.")
-            except Exception:
-                pass
-            return
+            break
 
         else:
             print("Invalid input. Returning to company prompt.\n")
