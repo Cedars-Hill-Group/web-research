@@ -25,11 +25,24 @@ TEMPLATE_PATH = Path("C:\\Obsidian\\Josh's Garden\\templates\\company template.m
 THRESHOLD = 0.75
 
 
-def _clean_company_filename(name: str, db_dir: Path) -> Path:
-    """Return a Title Case filename with spaces (no dashes) that is safe for the filesystem."""
-    pretty = pretty_company_name(name) or safe_slug(name)
-    pretty = re.sub(r'[<>:"/\\|?*]+', " ", pretty)
-    pretty = re.sub(r"\s+", " ", pretty).strip() or "Company"
+def _clean_company_filename(name: str, db_dir: Path, preserve_case: bool = False) -> Path:
+    """Return a Title Case filename with spaces (no dashes) that is safe for the filesystem.
+    
+    Args:
+        name: The company name
+        db_dir: The database directory
+        preserve_case: If True, preserve the original capitalization (useful for user input)
+    """
+    if preserve_case:
+        # For user-provided names, only clean dangerous characters but preserve capitalization
+        pretty = name.strip()
+        pretty = re.sub(r'[<>:"/\\|?*]+', " ", pretty)
+        pretty = re.sub(r"\s+", " ", pretty).strip() or "Company"
+    else:
+        # For derived names, use pretty_company_name for title casing
+        pretty = pretty_company_name(name) or safe_slug(name)
+        pretty = re.sub(r'[<>:"/\\|?*]+', " ", pretty)
+        pretty = re.sub(r"\s+", " ", pretty).strip() or "Company"
 
     candidate = pretty
     idx = 1
@@ -308,7 +321,7 @@ def main():
             target_file = db / f"{match}.md"
         elif custom_name:
             # Create new company with custom name
-            target_file = _clean_company_filename(custom_name, db)
+            target_file = _clean_company_filename(custom_name, db, preserve_case=True)
             print(f"Creating new company entry in DB: {target_file.name}")
             existing.append(target_file.stem)
             # Use the custom name for metadata

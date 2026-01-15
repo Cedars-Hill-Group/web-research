@@ -564,7 +564,6 @@ def run():
             # prompt for focus, firm_type, and source after scraping is complete
             try:
                 focus = input("Enter focus for this company (leave blank to skip): ").strip()
-                focus = input("Enter focus for this company (leave blank to skip): ").strip()
                 firm_type = input("Enter firm type for this company (leave blank to skip): ").strip()
                 prop_type = input("Enter property type for this company (comma-separated for multiple, leave blank to skip): ").strip()
                 loan_type = input("Enter loan type for this company (comma-separated for multiple, leave blank to skip): ").strip()
