@@ -16,7 +16,7 @@ from pathlib import Path
 from datetime import datetime
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from src.store import safe_slug, pretty_company_name, normalize_list_field
+from src.store import safe_slug, pretty_company_name, pretty_company_name_enhanced, normalize_list_field
 
 SRC_DIR = Path("data/companies")
 DB_DIR = Path("C:\\Obsidian\\Josh's Garden\\Companies")
@@ -39,8 +39,8 @@ def _clean_company_filename(name: str, db_dir: Path, preserve_case: bool = False
         pretty = re.sub(r'[<>:"/\\|?*]+', " ", pretty)
         pretty = re.sub(r"\s+", " ", pretty).strip() or "Company"
     else:
-        # For derived names, use pretty_company_name for title casing
-        pretty = pretty_company_name(name) or safe_slug(name)
+        # For derived names, use enhanced prettification with acronym support
+        pretty = pretty_company_name_enhanced(name) or safe_slug(name)
         pretty = re.sub(r'[<>:"/\\|?*]+', " ", pretty)
         pretty = re.sub(r"\s+", " ", pretty).strip() or "Company"
 

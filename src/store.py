@@ -67,6 +67,51 @@ def pretty_company_name(name: str | None) -> str | None:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned.title() if cleaned else None
 
+def pretty_company_name_enhanced(name: str | None) -> str | None:
+    """Convert a company identifier into properly capitalized words with acronym support.
+    
+    Removes dashes/underscores, capitalizes first letter of each word, and properly
+    capitalizes common acronyms and business entity suffixes like LLC, LLP, Inc, etc.
+    """
+    if not name:
+        return None
+    
+    # Remove dashes and underscores, normalize spaces
+    cleaned = re.sub(r"[-_]+", " ", str(name))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    
+    if not cleaned:
+        return None
+    
+    # Apply title case first
+    words = cleaned.title().split()
+    
+    # Common acronyms and terms that should be all caps
+    acronyms = {
+        'Llc', 'Lllc', 'Llp', 'Lp', 'Pc', 'Pa', 'Pllc', 'Plc',
+        'Inc', 'Corp', 'Ltd', 'Usa', 'Uk', 'Us', 'Cpa', 'Md', 'Dds',
+        'Phd', 'Mba', 'Ceo', 'Cfo', 'Cto', 'Hr', 'It', 'Ai', 'Vc',
+        'Pe', 'Re', 'Reit', 'Etf', 'Ira', 'Hsa', 'Fico', 'Api'
+    }
+    
+    # Process each word
+    result = []
+    for word in words:
+        # Check if word should be all caps
+        if word in acronyms:
+            result.append(word.upper())
+        # Check if word ends with 's (possessive) and base is an acronym
+        elif word.endswith("'S") or word.endswith("'s"):
+            base = word[:-2]
+            if base in acronyms:
+                result.append(base.upper() + word[-2:])
+            else:
+                result.append(word)
+        else:
+            result.append(word)
+    
+    return ' '.join(result)
+
 def default_metadata(website: str, focus: str | None = None, firm_type: str | None = None, source: str | None = None, prop_type: str | None = None, loan_type: str | None = None) -> dict:
     """Return default metadata for a captured page.
 
