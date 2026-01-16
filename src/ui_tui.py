@@ -7,7 +7,7 @@ import tempfile
 import os
 import subprocess
 import sys
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 from .scrape import fetch_html
 from .browser import close_driver
@@ -433,8 +433,8 @@ class HybridTUI(App):
 
             # write combined session file
             try:
-                from datetime import datetime
-                session_slug = f"session-{safe_slug(datetime.now(UTC).isoformat(timespec='seconds'))}"
+                from datetime import datetime, timezone
+                session_slug = f"session-{safe_slug(datetime.now(timezone.utc).isoformat(timespec='seconds'))}"
                 combined_md = "\n\n---\n\n".join([c for c in combined_parts if c])
                 # only create a combined session file if more than one page was saved
                 if combined_md and len(combined_parts) > 1:

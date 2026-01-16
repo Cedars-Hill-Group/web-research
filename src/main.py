@@ -5,7 +5,7 @@ import yaml
 import sys
 import subprocess
 from flask import Flask
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 
 from .browser import get_driver
@@ -418,7 +418,7 @@ def run():
                 if resp == "y":
                     # backup
                     try:
-                        bak = f"companies.csv.bak.{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+                        bak = f"companies.csv.bak.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
                         shutil.copyfile("companies.csv", bak)
                         print(f"Backup written to {bak}")
                     except Exception:

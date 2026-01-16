@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 import yaml
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 def safe_slug(text: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9\-]+", "-", text.strip().lower())
@@ -140,7 +140,7 @@ def default_metadata(website: str, focus: str | None = None, firm_type: str | No
 
     meta = {
         "website": ws,
-        "date": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "date": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "focus": normalize_list_field(focus),
         "firm_type": normalize_list_field(firm_type),
         "source": normalize_list_field(source),
@@ -158,12 +158,14 @@ def default_metadata(website: str, focus: str | None = None, firm_type: str | No
 
     return meta
 
-def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
+def update_metadata_in_files(md_dir: Path, updates: dict, append_mode: bool = True) -> int:
     """Update metadata fields in existing markdown files.
     
     Args:
         md_dir: Path to directory containing markdown files
         updates: Dict of metadata fields to update (e.g., {"focus": "value", "firm_type": "value"})
+        append_mode: If True, append metadata updates to a "metadata_updates" section instead of overwriting.
+                     If False, overwrite metadata as before.
     
     Returns:
         Number of files updated
@@ -187,31 +189,61 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                         meta = {}
                     body = parts[2]
                     
-                    # Normalize existing focus/firm_type/source/prop_type/loan_type if they were stored comma-separated
-                    for key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
-                        if isinstance(meta.get(key), str) and "," in meta.get(key, ""):
-                            meta[key] = normalize_list_field(meta.get(key))
+                    if append_mode:
+                        # APPEND MODE: Add metadata update entry to metadata_updates list
+                        # Preserve existing date if the file has one
+                        existing_date = meta.get("date")
+                        
+                        # Build the update entry with timestamp
+                        update_entry = {}
+                        for key, value in updates.items():
+                            if value is None:
+                                continue
+                            if key == "company":
+                                update_entry[key] = pretty_company_name(value)
+                            elif key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
+                                update_entry[key] = normalize_list_field(value)
+                            else:
+                                update_entry[key] = value
+                        
+                        # Add timestamp to this update
+                        update_entry["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+                        
+                        # Initialize metadata_updates list if it doesn't exist
+                        if "metadata_updates" not in meta:
+                            meta["metadata_updates"] = []
+                        elif not isinstance(meta["metadata_updates"], list):
+                            meta["metadata_updates"] = []
+                        
+                        # Append the new update entry
+                        meta["metadata_updates"].append(update_entry)
+                    else:
+                        # OVERWRITE MODE: Replace metadata as before (original behavior)
+                        # Normalize existing focus/firm_type/source/prop_type/loan_type if they were stored comma-separated
+                        for key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
+                            if isinstance(meta.get(key), str) and "," in meta.get(key, ""):
+                                meta[key] = normalize_list_field(meta.get(key))
 
-                    # Preserve existing date if the file has one
-                    existing_date = meta.get("date")
+                        # Preserve existing date if the file has one
+                        existing_date = meta.get("date")
 
-                    # Update metadata with new values
-                    for key, value in updates.items():
-                        if value is None:
-                            continue
-                        # Preserve existing date if it exists
-                        if key == "date" and existing_date:
-                            continue
-                        if key == "company":
-                            meta[key] = pretty_company_name(value)
-                        elif key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
-                            meta[key] = normalize_list_field(value)
-                        else:
-                            meta[key] = value
-                    
-                    # Ensure date is preserved in the metadata
-                    if existing_date:
-                        meta["date"] = existing_date
+                        # Update metadata with new values
+                        for key, value in updates.items():
+                            if value is None:
+                                continue
+                            # Preserve existing date if it exists
+                            if key == "date" and existing_date:
+                                continue
+                            if key == "company":
+                                meta[key] = pretty_company_name(value)
+                            elif key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
+                                meta[key] = normalize_list_field(value)
+                            else:
+                                meta[key] = value
+                        
+                        # Ensure date is preserved in the metadata
+                        if existing_date:
+                            meta["date"] = existing_date
                     
                     # Write back updated file
                     fm = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
