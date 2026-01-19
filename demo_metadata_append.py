@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Integration test demonstrating the append metadata feature in a realistic scenario.
-Shows how metadata updates accumulate over time with timestamps.
+Demo showing how metadata is added to existing files without overwriting.
+New fields are added only if they don't already exist or are None/null.
 """
 
 import tempfile
@@ -10,15 +10,15 @@ from pathlib import Path
 from src.store import update_metadata_in_files, write_markdown, default_metadata
 
 
-def demo_metadata_appending():
-    """Demonstrate the metadata appending workflow."""
+def demo_metadata_add_without_overwrite():
+    """Demonstrate the metadata add-only workflow."""
     
     with tempfile.TemporaryDirectory() as tmpdir:
         md_dir = Path(tmpdir) / "company-markdown"
         md_dir.mkdir()
         
         print("=" * 70)
-        print("METADATA APPENDING DEMO")
+        print("METADATA ADD-ONLY DEMO (NO OVERWRITING)")
         print("=" * 70)
         
         # Step 1: Create initial company file with default metadata
@@ -32,11 +32,10 @@ def demo_metadata_appending():
         print(f"✓ File created: {md_file.name}")
         
         # Step 2: First metadata update - add firm type and source
-        print("\n[STEP 2] First metadata update: Adding firm_type and source...")
+        print("\n[STEP 2] First update: Adding firm_type and source...")
         count = update_metadata_in_files(
             md_dir,
-            {"firm_type": "Commercial Real Estate Firm", "source": "web_research"},
-            append_mode=True
+            {"firm_type": "Commercial Real Estate Firm", "source": "web_research"}
         )
         print(f"✓ Updated {count} file(s)")
         
@@ -46,11 +45,10 @@ def demo_metadata_appending():
         print(f"Updated metadata:\n{yaml.safe_dump(current_meta, default_flow_style=False)}")
         
         # Step 3: Second metadata update - add property type and loan type
-        print("\n[STEP 3] Second metadata update: Adding property and loan types...")
+        print("\n[STEP 3] Second update: Adding property and loan types...")
         count = update_metadata_in_files(
             md_dir,
-            {"prop_type": "Office, Multi-Family", "loan_type": "Construction, Bridge"},
-            append_mode=True
+            {"prop_type": "Office, Multi-Family", "loan_type": "Construction, Bridge"}
         )
         print(f"✓ Updated {count} file(s)")
         
@@ -59,12 +57,12 @@ def demo_metadata_appending():
         current_meta = yaml.safe_load(parts[1])
         print(f"Updated metadata:\n{yaml.safe_dump(current_meta, default_flow_style=False)}")
         
-        # Step 4: Third metadata update - update focus
-        print("\n[STEP 4] Third metadata update: Updating focus...")
+        # Step 4: Try to update existing focus (should NOT overwrite)
+        print("\n[STEP 4] Third update: Attempting to change firm_type (should be ignored)...")
+        print("Sending update: firm_type='THIS SHOULD NOT APPEAR'")
         count = update_metadata_in_files(
             md_dir,
-            {"focus": "Acquisition and Development"},
-            append_mode=True
+            {"firm_type": "THIS SHOULD NOT APPEAR", "focus": "Acquisition"}
         )
         print(f"✓ Updated {count} file(s)")
         
@@ -78,29 +76,20 @@ def demo_metadata_appending():
         print("SUMMARY")
         print("=" * 70)
         
-        updates = current_meta.get("metadata_updates", [])
-        print(f"\nTotal metadata updates recorded: {len(updates)}")
-        print("\nUpdate History:")
-        for i, update in enumerate(updates, 1):
-            print(f"\n  Update {i} (at {update.get('updated_at', 'unknown')}):")
-            for key, value in sorted(update.items()):
-                if key != 'updated_at':
-                    print(f"    - {key}: {value}")
+        print("\n✓ Final metadata state:")
+        for key, value in sorted(current_meta.items()):
+            print(f"  - {key}: {value}")
         
-        print("\n✓ Original metadata preserved:")
-        for key in ["website", "date"]:
-            if key in current_meta:
-                print(f"    - {key}: {current_meta[key]}")
-        
-        print("\n✓ Current active metadata values:")
-        for key in ["focus", "firm_type"]:
-            if key in current_meta:
-                print(f"    - {key}: {current_meta[key]}")
+        print("\n✓ Key observations:")
+        print(f"  - firm_type kept original value: '{current_meta.get('firm_type')}'")
+        print(f"  - focus was added (was None): '{current_meta.get('focus')}'")
+        print(f"  - date preserved from initial creation: '{current_meta.get('date')}'")
+        print(f"  - All new fields were added successfully")
         
         print("\n" + "=" * 70)
-        print("✅ Demo complete - metadata was appended with timestamps!")
+        print("✅ Demo complete - metadata added without overwriting existing values!")
         print("=" * 70)
 
 
 if __name__ == "__main__":
-    demo_metadata_appending()
+    demo_metadata_add_without_overwrite()

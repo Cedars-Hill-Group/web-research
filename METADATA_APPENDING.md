@@ -1,16 +1,17 @@
-# Metadata Appending Implementation
+# Metadata Add-Only Implementation
 
 ## Overview
-Modified the database file update mechanism to **append metadata changes** instead of overwriting them. This ensures that all metadata updates are preserved with timestamps for audit and history tracking.
+Modified the database file update mechanism to **add new metadata fields without overwriting existing ones**. This ensures that existing metadata values are never lost when new information is added.
 
 ## Changes Made
 
 ### 1. **Updated `src/store.py`**
-   - Modified `update_metadata_in_files()` function to support two modes:
-     - **Append Mode (default)**: Metadata updates are stored in a `metadata_updates` list with timestamps
-     - **Overwrite Mode**: Original behavior for backward compatibility
+   - Modified `update_metadata_in_files()` function to only add metadata that doesn't already exist
+   - Existing metadata fields are **never overwritten** (except when their value is `None`/null)
+   - No timestamps or metadata_updates lists - just clean, direct metadata
 
-### 2. **Fixed Python 3.8 Compatibility**
+### 2. **Fixed Python 3.8+ Compatibility**
+   - Added `from __future__ import annotations` for type hint compatibility
    - Replaced `UTC` (Python 3.11+) with `timezone.utc` in:
      - `src/store.py`
      - `src/main.py`
@@ -18,16 +19,17 @@ Modified the database file update mechanism to **append metadata changes** inste
 
 ## How It Works
 
-### Append Mode (New Default Behavior)
+### Add-Only Behavior (Never Overwrites)
 
 When metadata is updated using `update_metadata_in_files()`:
 
-**Before (Original metadata):**
+**Initial File:**
 ```yaml
 ---
 website: https://example.com/
 date: '2025-01-10T10:00:00Z'
-focus: real estate
+focus: null
+firm_type: null
 ---
 ```
 
@@ -36,58 +38,80 @@ focus: real estate
 ---
 website: https://example.com/
 date: '2025-01-10T10:00:00Z'
-focus: real estate
-metadata_updates:
-  - firm_type: LLC
-    source: web
-    updated_at: '2026-01-16T18:42:01Z'
+focus: null
+firm_type: Commercial Real Estate
+source: web
 ---
 ```
 
-**After Second Update (focus and loan_type updated):**
+**After Second Update (trying to change firm_type, adding loan_type):**
 ```yaml
 ---
 website: https://example.com/
 date: '2025-01-10T10:00:00Z'
-focus: real estate
-metadata_updates:
-  - firm_type: LLC
-    source: web
-    updated_at: '2026-01-16T18:42:01Z'
-  - focus: commercial real estate
-    loan_type: construction
-    updated_at: '2026-01-16T18:42:01Z'
+focus: null
+firm_type: Commercial Real Estate    # NOT CHANGED (original value preserved)
+loan_type: construction               # ADDED (new field)
+source: web
 ---
 ```
 
 ### Key Features
 
-✅ **Append All Updates**: Each metadata update is preserved as a separate entry
-✅ **Timestamped**: Each update includes `updated_at` field for audit trail
-✅ **Original Data Preserved**: Initial metadata (website, date, focus) remains unchanged
-✅ **Backward Compatible**: Overwrite mode available if needed
-✅ **Ordered History**: Updates are stored in chronological order
+✅ **Never Overwrites**: Existing metadata values are always preserved
+✅ **Add Only**: New fields are added only if they don't exist or are None/null
+✅ **Date Protection**: Original date is always preserved
+✅ **Multiple Values Support**: All metadata fields (focus, firm_type, source, prop_type, loan_type) support comma-separated values that become YAML lists
+✅ **Simple & Clean**: No timestamps, no history lists, just straightforward metadata
+✅ **Predictable**: If a field has a value, it will never change
+
+## Multiple Values Support
+
+All metadata fields can accept **comma-separated values** which are automatically converted to YAML lists:
+
+```python
+# Single value - stored as string
+updates = {"focus": "commercial real estate"}
+# Result: focus: commercial real estate
+
+# Multiple values - stored as list
+updates = {"focus": "commercial real estate, residential, industrial"}
+# Result:
+# focus:
+#   - commercial real estate
+#   - residential
+#   - industrial
+
+# Works for all fields
+updates = {
+    "focus": "acquisition, development",
+    "firm_type": "LLC, Partnership",
+    "source": "web, linkedin, direct research",
+    "prop_type": "Office, Retail, Industrial",
+    "loan_type": "Construction, Bridge, Permanent"
+}
+```
 
 ## Function Signature
 
 ```python
-def update_metadata_in_files(md_dir: Path, updates: dict, append_mode: bool = True) -> int:
+def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
     """Update metadata fields in existing markdown files.
+    
+    Only adds new metadata fields that don't already exist or have None/null values.
+    Never overwrites existing metadata values (except date which is preserved separately).
     
     Args:
         md_dir: Path to directory containing markdown files
-        updates: Dict of metadata fields to update
-        append_mode: If True (default), append metadata to metadata_updates list.
-                     If False, use original overwrite behavior.
+        updates: Dict of metadata fields to add
     
     Returns:
         Number of files updated
     """
 ```
 
-## Usage Examples
+## Usage Example
 
-### Using Append Mode (Default)
 ```python
 from pathlib import Path
 from src.store import update_metadata_in_files
@@ -98,49 +122,49 @@ updates = {
     "source": "web"
 }
 
-# Metadata updates will be appended
+# New metadata fields will be added, existing ones preserved
 count = update_metadata_in_files(md_dir, updates)
 print(f"Updated {count} files")
 ```
 
-### Using Overwrite Mode (Legacy)
-```python
-# Only use if backward compatibility is needed
-count = update_metadata_in_files(md_dir, updates, append_mode=False)
-```
+## Behavior Rules
+
+1. **New Field**: If metadata field doesn't exist → ADD IT
+2. **Existing Field with Value**: If metadata field exists and has a value → KEEP ORIGINAL
+3. **Existing Field with None/null**: If metadata field is None/null → REPLACE WITH NEW VALUE
+4. **Date Field**: Always preserve existing date, never overwrite
 
 ## Benefits
 
-1. **Complete Audit Trail**: All metadata modifications are recorded with timestamps
-2. **Data Preservation**: No information is lost - all updates are kept
-3. **History Tracking**: Can track how metadata evolved over time
-4. **Debugging**: Easier to identify when and what metadata was changed
-5. **Compliance**: Supports requirements for data change documentation
+1. **No Data Loss**: Existing metadata is never accidentally overwritten
+2. **Safe Updates**: Can run updates repeatedly without fear of losing data
+3. **Clean Metadata**: No history tracking complexity, just current values
+4. **Simple to Understand**: Straightforward "add if missing" logic
+5. **Idempotent**: Running the same update multiple times has no effect
 
 ## Testing
 
 A comprehensive test suite (`test_metadata_append.py`) validates:
-- ✓ Metadata updates are appended correctly
-- ✓ Each update includes a timestamp
-- ✓ Original metadata is preserved
-- ✓ Multiple updates are tracked in order
-- ✓ Overwrite mode still works for backward compatibility
+- ✓ New metadata fields are added correctly
+- ✓ Existing metadata fields are never overwritten
+- ✓ None/null values are replaced with new values
+- ✓ Date is always preserved
+- ✓ Multiple updates work correctly
 
 **Run tests:**
 ```bash
 python test_metadata_append.py
 ```
 
-## Migration Notes
-
-- The change is **automatically applied** when `update_metadata_in_files()` is called
-- Existing metadata files without `metadata_updates` will have the field created on first update
-- No manual migration needed
-- Old metadata remains untouched
+**Run demo:**
+```bash
+python demo_metadata_append.py
+```
 
 ## Files Modified
 
 - [src/store.py](src/store.py) - Core implementation
 - [src/main.py](src/main.py) - Python 3.8 compatibility fix
 - [src/ui_tui.py](src/ui_tui.py) - Python 3.8 compatibility fix
-- [test_metadata_append.py](test_metadata_append.py) - New test suite
+- [test_metadata_append.py](test_metadata_append.py) - Test suite
+- [demo_metadata_append.py](demo_metadata_append.py) - Interactive demo
