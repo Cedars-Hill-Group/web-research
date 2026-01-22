@@ -16,7 +16,7 @@ from pathlib import Path
 from datetime import datetime
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from src.store import safe_slug, pretty_company_name, pretty_company_name_enhanced, normalize_list_field
+from src.store import safe_slug, pretty_company_name, pretty_company_name_enhanced, normalize_list_field, append_to_list_field
 
 SRC_DIR = Path("data/companies")
 DB_DIR = Path("C:\\Obsidian\\Josh's Garden\\Companies")
@@ -252,8 +252,12 @@ def append_markdown_to_company(src: Path, dst_file: Path, company_display: str |
                     dst_meta["date"] = chosen.isoformat()
                 else:
                     dst_meta["date"] = dst_meta.get("date") or v
-        elif k in ("focus", "firm_type"):
-            dst_meta[k] = normalize_list_field(v)
+        elif k in ("focus", "firm_type", "source", "prop_type", "loan_type"):
+            # For list fields, append to existing values instead of overwriting
+            if k in dst_meta and dst_meta.get(k) is not None:
+                dst_meta[k] = append_to_list_field(dst_meta[k], v)
+            else:
+                dst_meta[k] = normalize_list_field(v)
         else:
             dst_meta[k] = v
 

@@ -69,6 +69,44 @@ def normalize_list_field(value):
     return value
 
 
+def append_to_list_field(existing, new_value):
+    """Append new_value to an existing list field, avoiding duplicates.
+    
+    Args:
+        existing: The existing value (None, str, or list)
+        new_value: The value to append (str or list)
+    
+    Returns:
+        The combined list, or None if both are None/empty
+    """
+    if new_value is None:
+        return existing
+    
+    # Normalize the new value first
+    normalized_new = normalize_list_field(new_value)
+    if normalized_new is None:
+        return existing
+    
+    # Convert to list if needed
+    new_list = normalized_new if isinstance(normalized_new, list) else [normalized_new]
+    
+    # If existing is None/empty, return new as-is
+    if existing is None:
+        return new_list if len(new_list) > 1 else new_list[0]
+    
+    # Convert existing to list if needed
+    existing_list = existing if isinstance(existing, list) else [existing]
+    
+    # Append new items, avoiding duplicates (case-insensitive)
+    existing_lower = [str(item).lower() for item in existing_list]
+    for item in new_list:
+        if str(item).lower() not in existing_lower:
+            existing_list.append(item)
+    
+    # Return as list if multiple items, otherwise as string
+    return existing_list if len(existing_list) > 1 else existing_list[0]
+
+
 def pretty_company_name(name: str | None) -> str | None:
     """Convert a company identifier into Title Case words without dashes/underscores."""
     if not name:
@@ -171,12 +209,13 @@ def default_metadata(website: str, focus: str | None = None, firm_type: str | No
 def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
     """Update metadata fields in existing markdown files.
     
-    Only adds new metadata fields that don't already exist or have None/null values.
-    Never overwrites existing metadata values (except date which is preserved separately).
+    For list fields (focus, firm_type, source, prop_type, loan_type), appends new values
+    to existing ones. For other fields, only adds if they don't exist.
+    Never overwrites the date field.
     
     Args:
         md_dir: Path to directory containing markdown files
-        updates: Dict of metadata fields to add (e.g., {"focus": "value", "firm_type": "value"})
+        updates: Dict of metadata fields to add/append (e.g., {"focus": "value", "firm_type": "value"})
     
     Returns:
         Number of files updated
@@ -208,31 +247,46 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                     # Preserve existing date if the file has one
                     existing_date = meta.get("date")
 
-                    # Add new metadata fields only if they don't already exist or are None
+                    # Update metadata fields
+                    file_changed = False
                     for key, value in updates.items():
                         if value is None:
                             continue
                         # Never overwrite existing date
                         if key == "date" and existing_date:
                             continue
-                        # Only add metadata if it doesn't exist or is None/null
-                        if key not in meta or meta.get(key) is None:
-                            if key == "company":
-                                meta[key] = pretty_company_name(value)
-                            elif key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
-                                meta[key] = normalize_list_field(value)
+                        
+                        # For list fields, append to existing values
+                        if key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
+                            if key in meta and meta.get(key) is not None:
+                                # Append to existing list
+                                meta[key] = append_to_list_field(meta[key], value)
+                                file_changed = True
                             else:
-                                meta[key] = value
+                                # Field doesn't exist or is None, add new value
+                                meta[key] = normalize_list_field(value)
+                                if meta[key] is not None:
+                                    file_changed = True
+                        else:
+                            # For non-list fields, only add if they don't exist
+                            if key not in meta or meta.get(key) is None:
+                                if key == "company":
+                                    meta[key] = pretty_company_name(value)
+                                else:
+                                    meta[key] = value
+                                file_changed = True
                     
-                    # Ensure date is preserved in the metadata
-                    if existing_date:
-                        meta["date"] = existing_date
-                    
-                    # Write back updated file
-                    fm = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
-                    content = f"---\n{fm}---{body}"
-                    md_file.write_text(content, encoding="utf-8")
-                    updated_count += 1
+                    # Only write back if something changed
+                    if file_changed:
+                        # Ensure date is preserved in the metadata
+                        if existing_date:
+                            meta["date"] = existing_date
+                        
+                        # Write back updated file
+                        fm = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
+                        content = f"---\n{fm}---{body}"
+                        md_file.write_text(content, encoding="utf-8")
+                        updated_count += 1
         except Exception:
             continue
     
