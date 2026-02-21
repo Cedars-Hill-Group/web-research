@@ -19,6 +19,7 @@ A small toolset for quickly finding company websites, browsing them in a lightwe
 - Metadata written into YAML front matter: `website`, `date`, `focus`.
 - Interactive TUI (`src/ui_tui.py`) for scraping, previewing, and saving pages.
 - Batch mode (`companies.csv`) with optional per-company focus prompting, and a merge tool to consolidate markdown into `company_markdown_db/companies/`.
+- **AI Research mode** — multi-agent OpenAI pipeline that identifies a company's website, classifies the company, and generates a structured Markdown report using customisable schema files (see [docs/OPENAI_INTEGRATION.md](docs/OPENAI_INTEGRATION.md)).
 
 ---
 
@@ -28,10 +29,13 @@ A small toolset for quickly finding company websites, browsing them in a lightwe
 .
 ├── README.md
 ├── requirements.txt
-├── config.yaml            # filters and scrape options
+├── config.yaml            # filters, scrape options, and OpenAI settings
 ├── companies.csv          # optional CSV with company names for batch runs
+├── prompts/               # agent system prompts (Markdown, editable)
+├── schemas/               # company type schemas (Markdown, editable/extensible)
 ├── scripts/               # helper scripts (merge tool, demos)
 ├── data/                  # saved raw HTML + markdown per company
+├── docs/                  # additional documentation
 ├── src/                   # application code
 └── tests/                 # unit tests
 ```
@@ -73,6 +77,17 @@ filters:
   include_paths: ["/team", "/about", "/press"]
 ```
 
+For the **AI Research mode** add your OpenAI API key (or set the `OPENAI_API_KEY` environment variable):
+
+```yaml
+openai:
+  api_key: 'sk-...'
+  model: 'gpt-4o-mini'
+  max_subpages: 5
+```
+
+See [docs/OPENAI_INTEGRATION.md](docs/OPENAI_INTEGRATION.md) for full OpenAI configuration details.
+
 ---
 
 ## Usage
@@ -83,7 +98,19 @@ Run the app:
 python -m src.main
 ```
 
-You will be prompted to choose **Single** or **Batch** mode.
+You will be prompted to choose **Single**, **Batch**, or **AI Research** mode.
+
+### AI Research mode (OpenAI)
+
+Choose option **3** and enter a company name. The pipeline will:
+1. Use OpenAI to identify the company's official website.
+2. Scrape the homepage and up to `max_subpages` sub-pages.
+3. Classify the company and select the appropriate schema.
+4. Generate a structured Markdown report.
+
+You will be offered the option to save the report to the `data/companies/` directory.
+
+See [docs/OPENAI_INTEGRATION.md](docs/OPENAI_INTEGRATION.md) for full details, programmatic usage, and how to add custom schemas.
 
 Single mode
 - Enter a company name, pick the candidate site, the TUI will open the site.

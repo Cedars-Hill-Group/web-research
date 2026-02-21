@@ -3,6 +3,13 @@ google:
   api_key: 'AIzaSyDfGumvGDzhMRdbH89ncrtRoGChccsOPU0'
   cx: '80965d42098504797'
 
+openai:
+  api_key: ''          # Set your OpenAI API key here or use OPENAI_API_KEY env var
+  model: 'gpt-4o-mini' # Model to use for all agents
+  max_subpages: 5      # Maximum number of subpages to read per company website
+  schemas_dir: 'schemas'   # Directory containing schema markdown files
+  prompts_dir: 'prompts'   # Directory containing agent prompt markdown files
+
 scrape:
   max_links: 50
   allow_external: false

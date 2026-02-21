@@ -187,6 +187,61 @@ def _ensure_driver_alive(driver, user_agent=None):
             return None
 
 
+def _run_openai_research(cfg: dict) -> None:
+    """Interactive AI-assisted company research using the OpenAI multi-agent pipeline."""
+    from .openai_agent import CompanyResearchPipeline
+
+    print("\n=== AI Research Mode (OpenAI) ===")
+    print("This mode uses OpenAI to identify company websites, classify the company,")
+    print("and generate a structured description and summary.\n")
+
+    try:
+        pipeline = CompanyResearchPipeline.from_config()
+    except (ImportError, ValueError) as exc:
+        print(f"Error initialising OpenAI pipeline: {exc}")
+        return
+
+    while True:
+        company = input("Enter company name (or 'q' to quit): ").strip()
+        if company.lower() == "q":
+            print("Exiting AI research mode.")
+            break
+
+        context = input("Enter optional context (industry, location, etc.) or press Enter to skip: ").strip()
+
+        print(f"\nResearching '{company}'…")
+        try:
+            result = pipeline.run(company, context)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error during research: {exc}")
+            continue
+
+        print(f"\n✓ Website identified: {result['website']}")
+        print(f"✓ Schema applied:     {result['schema']}")
+        print(f"✓ Classifier notes:   {result['classifier_agent'].get('reasoning', '')}\n")
+        print("--- Report ---")
+        print(result["report"])
+        print("--------------\n")
+
+        # Offer to save the report
+        save = input("Save report to markdown file? (y/n): ").strip().lower()
+        if save == "y":
+            from .store import company_dirs, safe_slug, default_metadata, write_markdown
+            dirs = company_dirs("data/companies", company)
+            meta = default_metadata(
+                website=result["website"],
+                focus="ai-research",
+            )
+            meta["schema"] = result["schema"]
+            slug = safe_slug(f"{company}-ai-research")
+            path = write_markdown(dirs["md"], slug, result["report"], meta)
+            print(f"Report saved to {path}\n")
+
+        another = input("Research another company? (y/n): ").strip().lower()
+        if another != "y":
+            break
+
+
 def run():
     global global_tui
 
@@ -213,9 +268,12 @@ def run():
     except Exception:
         pass
 
-    # Choose input mode: single or batch
-    mode = input("Choose input mode - (1) Single company, (2) Batch from companies.csv: ").strip()
-    if mode == "2":
+    # Choose input mode: single, batch, or AI-assisted
+    mode = input("Choose input mode - (1) Single company, (2) Batch from companies.csv, (3) AI Research (OpenAI): ").strip()
+    if mode == "3":
+        _run_openai_research(cfg)
+        return
+    elif mode == "2":
         # Batch mode
         import csv
         rows = []
