@@ -196,14 +196,14 @@ class ClassifierAgent:
         self._schemas_dir = schemas_dir
 
     def run(self, company_name: str, website_content: str) -> dict[str, Any]:
-        """Return a dict with keys: schema, confidence, reasoning.
+        """Return a dict with keys: schema, focus, confidence, reasoning.
 
         Args:
             company_name: The name of the company.
             website_content: Scraped text from the company's website.
 
         Returns:
-            Dict with ``schema``, ``confidence``, and ``reasoning`` keys.
+            Dict with ``schema``, ``focus``, ``confidence``, and ``reasoning`` keys.
         """
         available = _list_schemas(self._schemas_dir)
         schema_list = "\n".join(f"- {s}" for s in available)
@@ -228,6 +228,16 @@ class ClassifierAgent:
         # Ensure schema is a valid option, fall back to "general"
         if result.get("schema") not in available:
             result["schema"] = "general"
+
+        # Ensure focus is present; prefer model-provided focus, else derive from schema.
+        focus = str(result.get("focus") or "").strip()
+        if not focus:
+            schema_name = str(result.get("schema") or "general").strip()
+            if schema_name and schema_name != "general":
+                focus = schema_name.replace("_", " ")
+            else:
+                focus = "general"
+        result["focus"] = focus
         return result
 
 

@@ -100,6 +100,16 @@ python -m src.main
 
 You will be prompted to choose **Single**, **Batch**, or **AI Research** mode.
 
+### AI Batch mode (OpenAI + companies.csv)
+
+Choose option **4** to run AI research for every company in `companies.csv`.
+
+This mode will:
+1. Run the OpenAI website/classifier/analyst pipeline for each company row.
+2. Auto-save each report to `data/companies/<Company>/markdown` with metadata (`website`, `focus`, `firm_type`, `source`, `schema`).
+3. Continue on failures (optional prompt) and print per-company status.
+4. Offer to remove processed rows from `companies.csv` so you can resume later.
+
 ### AI Research mode (OpenAI)
 
 Choose option **3** and enter a company name. The pipeline will:
@@ -109,6 +119,8 @@ Choose option **3** and enter a company name. The pipeline will:
 4. Generate a structured Markdown report.
 
 You will be offered the option to save the report to the `data/companies/` directory.
+
+When saved from AI Research mode, `website` and `firm_type` are stored in YAML front matter metadata, and any schema field lines for Website/Firm Type are removed from the markdown body to avoid duplicate data.
 
 See [docs/OPENAI_INTEGRATION.md](docs/OPENAI_INTEGRATION.md) for full details, programmatic usage, and how to add custom schemas.
 

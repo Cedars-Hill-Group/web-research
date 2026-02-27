@@ -50,14 +50,14 @@ export OPENAI_API_KEY="sk-..."
 
 ### Interactive Mode
 
-Run the main application and choose option **3 — AI Research**:
+Run the main application and choose option **3 — AI Research** (interactive single-company mode) or **4 — AI Batch from companies.csv**:
 
 ```bash
 python -m src.main
 ```
 
 ```
-Choose input mode - (1) Single company, (2) Batch from companies.csv, (3) AI Research (OpenAI): 3
+Choose input mode - (1) Single company, (2) Batch from companies.csv, (3) AI Research (OpenAI), (4) AI Batch from companies.csv: 3
 
 === AI Research Mode (OpenAI) ===
 Enter company name (or 'q' to quit): Acme Lending
@@ -74,6 +74,29 @@ Researching 'Acme Lending'…
 ## Company Overview
 ...
 ```
+
+When you save a report from AI Research mode, `website` and `firm_type` are written to YAML front matter metadata. Any schema field lines for Website/Firm Type are removed from the markdown body to avoid duplicate data.
+
+### AI Batch Mode
+
+Choose option **4** to process all companies listed in `companies.csv` using the OpenAI pipeline.
+
+In AI batch mode:
+1. Each company is researched via WebsiteAgent → ClassifierAgent → AnalystAgent.
+2. Reports are auto-saved to `data/companies/<Company>/markdown`.
+3. Metadata includes `website`, `focus`, `firm_type`, `source=ai-research`, and `schema`.
+4. You can continue on errors and optionally remove processed rows from `companies.csv` for resume-friendly runs.
+
+### AI Full Workflow
+
+AI Research mode is AI-only and does not launch manual/TUI website scraping.
+
+For each company in mode `3`:
+1. AI agents identify website, classify schema, and generate the report.
+2. If you choose to save, the AI report is written to `data/companies/<Company>/markdown`.
+3. You are prompted only for missing metadata not already captured by AI.
+4. Captured + prompted metadata is written/merged into markdown front matter.
+5. At the end of the AI session, you can run the merge tool immediately to merge content into your existing company database.
 
 ### Programmatic Usage
 

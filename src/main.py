@@ -4,6 +4,8 @@ import time
 import yaml
 import sys
 import subprocess
+import re
+import csv
 from flask import Flask
 from datetime import datetime, timezone
 
@@ -17,6 +19,44 @@ from pathlib import Path
 
 app = Flask(__name__)
 global_tui = None   # holds the active TUI instance
+
+
+def _extract_ai_report_field_lines(report: str) -> tuple[str | None, str | None, str]:
+    """Extract website/firm type field-line values and return report body without those lines.
+
+    This targets schema-style field lines (for example, "- **Website**: ...") so that
+    website and firm type live in markdown metadata instead of being duplicated in the
+    markdown body for AI Research mode saves.
+    """
+    if not report:
+        return None, None, ""
+
+    website_value: str | None = None
+    firm_type_value: str | None = None
+    kept_lines: list[str] = []
+
+    website_line = re.compile(r"^\s*[-*]?\s*\*{0,2}\s*website\s*\*{0,2}\s*:\s*(.+?)\s*$", re.IGNORECASE)
+    firm_type_line = re.compile(r"^\s*[-*]?\s*\*{0,2}\s*firm\s+type\s*\*{0,2}\s*:\s*(.+?)\s*$", re.IGNORECASE)
+
+    for line in report.splitlines():
+        website_match = website_line.match(line)
+        if website_match:
+            extracted = website_match.group(1).strip()
+            if extracted and extracted.lower() not in {"not available", "n/a", "na"}:
+                website_value = extracted
+            continue
+
+        firm_type_match = firm_type_line.match(line)
+        if firm_type_match:
+            extracted = firm_type_match.group(1).strip()
+            if extracted and extracted.lower() not in {"not available", "n/a", "na"}:
+                firm_type_value = extracted
+            continue
+
+        kept_lines.append(line)
+
+    cleaned_report = "\n".join(kept_lines).strip()
+    return website_value, firm_type_value, cleaned_report
 
 
 def bypass_scraping_and_add_to_db(company_name: str) -> bool:
@@ -187,7 +227,38 @@ def _ensure_driver_alive(driver, user_agent=None):
             return None
 
 
-def _run_openai_research(cfg: dict) -> None:
+def _prompt_missing_ai_metadata(captured: dict[str, str | None]) -> dict[str, str | None]:
+    """Prompt only for metadata fields not captured by AI agents."""
+    resolved = dict(captured)
+
+    if not resolved.get("focus"):
+        resolved["focus"] = input("Enter focus for this company (leave blank to skip): ").strip() or None
+    if not resolved.get("firm_type"):
+        resolved["firm_type"] = input("Enter firm type for this company (leave blank to skip): ").strip() or None
+    if not resolved.get("source"):
+        resolved["source"] = input("Enter source for this company (leave blank to skip): ").strip() or None
+    if not resolved.get("prop_type"):
+        resolved["prop_type"] = input("Enter property type for this company (comma-separated for multiple, leave blank to skip): ").strip() or None
+    if not resolved.get("loan_type"):
+        resolved["loan_type"] = input("Enter loan type for this company (comma-separated for multiple, leave blank to skip): ").strip() or None
+
+    return resolved
+
+
+def _resolve_ai_focus(classifier_result: dict, schema_name: str | None) -> str | None:
+    """Resolve company focus from classifier output with schema-based fallback."""
+    focus = str((classifier_result or {}).get("focus") or "").strip()
+    if focus:
+        return focus
+
+    schema = str(schema_name or "").strip()
+    if schema and schema != "general":
+        return schema.replace("_", " ")
+
+    return None
+
+
+def _run_openai_research(cfg: dict, driver) -> tuple[object, list[str]]:
     """Interactive AI-assisted company research using the OpenAI multi-agent pipeline."""
     from .openai_agent import CompanyResearchPipeline
 
@@ -199,7 +270,9 @@ def _run_openai_research(cfg: dict) -> None:
         pipeline = CompanyResearchPipeline.from_config()
     except (ImportError, ValueError) as exc:
         print(f"Error initialising OpenAI pipeline: {exc}")
-        return
+        return driver, []
+
+    processed_companies: list[str] = []
 
     while True:
         company = input("Enter company name (or 'q' to quit): ").strip()
@@ -223,23 +296,142 @@ def _run_openai_research(cfg: dict) -> None:
         print(result["report"])
         print("--------------\n")
 
-        # Offer to save the report
+        website_from_body, firm_type_from_body, cleaned_report = _extract_ai_report_field_lines(result["report"])
+        ai_website = website_from_body or result["website"]
+        focus_from_agent = _resolve_ai_focus(result.get("classifier_agent", {}), result.get("schema"))
+
+        # Save AI report output first
         save = input("Save report to markdown file? (y/n): ").strip().lower()
         if save == "y":
-            from .store import company_dirs, safe_slug, default_metadata, write_markdown
+            from .store import company_dirs, safe_slug, default_metadata, write_markdown, update_metadata_in_files
             dirs = company_dirs("data/companies", company)
             meta = default_metadata(
-                website=result["website"],
-                focus="ai-research",
+                website=ai_website,
+                focus=focus_from_agent,
+                firm_type=firm_type_from_body,
+                source="ai-research",
             )
             meta["schema"] = result["schema"]
             slug = safe_slug(f"{company}-ai-research")
-            path = write_markdown(dirs["md"], slug, result["report"], meta)
+            path = write_markdown(dirs["md"], slug, cleaned_report, meta)
             print(f"Report saved to {path}\n")
+
+            captured = {
+                "focus": focus_from_agent,
+                "firm_type": firm_type_from_body,
+                "source": "ai-research",
+                "prop_type": None,
+                "loan_type": None,
+            }
+            resolved = _prompt_missing_ai_metadata(captured)
+            updates = {}
+            if resolved.get("focus"):
+                updates["focus"] = resolved["focus"]
+            if resolved.get("firm_type"):
+                updates["firm_type"] = resolved["firm_type"]
+            if resolved.get("source"):
+                updates["source"] = resolved["source"]
+            if resolved.get("prop_type"):
+                updates["prop_type"] = resolved["prop_type"]
+            if resolved.get("loan_type"):
+                updates["loan_type"] = resolved["loan_type"]
+
+            if updates:
+                count = update_metadata_in_files(dirs['md'], updates)
+                if count > 0:
+                    print(f"Updated metadata in {count} file(s).")
+        else:
+            print("Report not saved; AI mode does not support manual scraping.")
+
+        processed_companies.append(company)
 
         another = input("Research another company? (y/n): ").strip().lower()
         if another != "y":
             break
+
+    return driver, processed_companies
+
+
+def _run_openai_research_batch(cfg: dict, driver) -> tuple[object, list[dict], list[dict], list[str], list[str] | None]:
+    """Batch AI-assisted research from companies.csv with automatic report saves.
+
+    Returns:
+        (driver, all_rows, processed_rows, processed_names, fieldnames)
+    """
+    from .openai_agent import CompanyResearchPipeline
+    from .store import company_dirs, safe_slug, default_metadata, write_markdown
+
+    print("\n=== AI Batch Research Mode (OpenAI + companies.csv) ===")
+    print("This mode processes each company from companies.csv using the OpenAI pipeline.")
+    print("Reports are auto-saved to markdown with metadata.\n")
+
+    rows: list[dict] = []
+    fieldnames: list[str] | None = None
+    try:
+        with open("companies.csv", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            fieldnames = reader.fieldnames
+            for row in reader:
+                rows.append(row)
+    except Exception:
+        print("Failed to read companies.csv or file missing.")
+        return driver, [], [], [], None
+
+    companies: list[tuple[str, dict]] = []
+    for row in rows:
+        name = (row.get("company") or row.get("name") or "").strip()
+        if name:
+            companies.append((name, row))
+
+    if not companies:
+        print("No companies loaded from companies.csv. Exiting.")
+        return driver, rows, [], [], fieldnames
+
+    try:
+        pipeline = CompanyResearchPipeline.from_config()
+    except (ImportError, ValueError) as exc:
+        print(f"Error initialising OpenAI pipeline: {exc}")
+        return driver, rows, [], [], fieldnames
+
+    context = input("Enter optional context to apply to all companies (or press Enter to skip): ").strip()
+    continue_on_error = input("Continue to next company if one fails? (y/n): ").strip().lower() != "n"
+
+    processed_rows: list[dict] = []
+    processed_companies: list[str] = []
+
+    total = len(companies)
+    for index, (company, row) in enumerate(companies, start=1):
+        print(f"\n[{index}/{total}] Researching '{company}'…")
+        try:
+            result = pipeline.run(company, context)
+            website_from_body, firm_type_from_body, cleaned_report = _extract_ai_report_field_lines(result["report"])
+            ai_website = website_from_body or result["website"]
+            focus_from_agent = _resolve_ai_focus(result.get("classifier_agent", {}), result.get("schema"))
+
+            dirs = company_dirs("data/companies", company)
+            metadata = default_metadata(
+                website=ai_website,
+                focus=focus_from_agent,
+                firm_type=firm_type_from_body,
+                source="ai-research",
+            )
+            metadata["schema"] = result["schema"]
+            slug = safe_slug(f"{company}-ai-research")
+            path = write_markdown(dirs["md"], slug, cleaned_report, metadata)
+
+            print(f"  ✓ Website: {result['website']}")
+            print(f"  ✓ Schema:  {result['schema']}")
+            print(f"  ✓ Saved:   {path}")
+
+            processed_rows.append(row)
+            processed_companies.append(company)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ✗ Failed: {exc}")
+            if not continue_on_error:
+                print("Stopping batch due to error.")
+                break
+
+    return driver, rows, processed_rows, processed_companies, fieldnames
 
 
 def run():
@@ -269,13 +461,82 @@ def run():
         pass
 
     # Choose input mode: single, batch, or AI-assisted
-    mode = input("Choose input mode - (1) Single company, (2) Batch from companies.csv, (3) AI Research (OpenAI): ").strip()
+    mode = input(
+        "Choose input mode - (1) Single company, (2) Batch from companies.csv, "
+        "(3) AI Research (OpenAI), (4) AI Batch from companies.csv: "
+    ).strip()
     if mode == "3":
-        _run_openai_research(cfg)
+        driver, processed_companies = _run_openai_research(cfg, driver)
+
+        # close driver when AI workflow is done
+        try:
+            from .browser import close_driver
+            close_driver(driver)
+            print("Browser closed.")
+        except Exception:
+            pass
+
+        if processed_companies:
+            print(f"\nProcessed {len(processed_companies)} company/companies:")
+            for comp in processed_companies:
+                print(f"  - {comp}")
+
+            try:
+                resp = input("\nRun merge tool to add markdown files to DB now? (y/n): ").strip().lower()
+                if resp == "y":
+                    subprocess.run([sys.executable, "scripts/merge_markdown_db.py"], check=False)
+            except Exception:
+                pass
+
+        return
+    elif mode == "4":
+        driver, rows, processed_rows, processed_companies, fieldnames = _run_openai_research_batch(cfg, driver)
+
+        try:
+            from .browser import close_driver
+            close_driver(driver)
+            print("Browser closed.")
+        except Exception:
+            pass
+
+        if processed_companies:
+            print(f"\nProcessed {len(processed_companies)} company/companies:")
+            for comp in processed_companies:
+                print(f"  - {comp}")
+
+            try:
+                resp = input("Remove processed companies from companies.csv so you can resume later? (y/n): ").strip().lower()
+                if resp == "y":
+                    try:
+                        bak = f"companies.csv.bak.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+                        shutil.copyfile("companies.csv", bak)
+                        print(f"Backup written to {bak}")
+                    except Exception:
+                        print("Failed to write backup of companies.csv")
+
+                    remaining = [r for r in rows if r not in processed_rows]
+                    try:
+                        with open("companies.csv", "w", encoding="utf-8", newline="") as fh:
+                            writer = csv.DictWriter(fh, fieldnames=fieldnames or ("company",))
+                            writer.writeheader()
+                            for r in remaining:
+                                writer.writerow(r)
+                        print("Updated companies.csv with remaining companies.")
+                    except Exception:
+                        print("Failed to update companies.csv")
+            except Exception:
+                pass
+
+            try:
+                resp = input("Run merge tool to add markdown files to DB now? (y/n): ").strip().lower()
+                if resp == "y":
+                    subprocess.run([sys.executable, "scripts/merge_markdown_db.py"], check=False)
+            except Exception:
+                pass
+
         return
     elif mode == "2":
         # Batch mode
-        import csv
         rows = []
         fieldnames = None
         try:

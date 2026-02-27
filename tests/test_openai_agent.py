@@ -180,7 +180,12 @@ def test_classifier_agent_run(dirs):
     from src.openai_agent import ClassifierAgent
 
     prompts_dir, schemas_dir = dirs
-    payload = {"schema": "commercial_real_estate", "confidence": "high", "reasoning": "CRE lender"}
+    payload = {
+        "schema": "commercial_real_estate",
+        "focus": "commercial real estate lending",
+        "confidence": "high",
+        "reasoning": "CRE lender",
+    }
     client = MagicMock()
     client.chat.completions.create.return_value = _mock_chat_response(json.dumps(payload))
 
@@ -188,6 +193,7 @@ def test_classifier_agent_run(dirs):
     result = agent.run("Acme Lending", "We provide commercial real estate loans.")
 
     assert result["schema"] == "commercial_real_estate"
+    assert result["focus"] == "commercial real estate lending"
 
 
 def test_classifier_agent_falls_back_to_general(dirs):
@@ -203,6 +209,22 @@ def test_classifier_agent_falls_back_to_general(dirs):
     result = agent.run("Mystery Corp", "We do things.")
 
     assert result["schema"] == "general"
+    assert result["focus"] == "general"
+
+
+def test_classifier_agent_focus_falls_back_to_schema_when_missing(dirs):
+    from src.openai_agent import ClassifierAgent
+
+    prompts_dir, schemas_dir = dirs
+    payload = {"schema": "commercial_real_estate", "confidence": "high", "reasoning": "CRE lender"}
+    client = MagicMock()
+    client.chat.completions.create.return_value = _mock_chat_response(json.dumps(payload))
+
+    agent = ClassifierAgent(client, "gpt-4o-mini", prompts_dir, schemas_dir)
+    result = agent.run("Acme Lending", "We provide commercial real estate loans.")
+
+    assert result["schema"] == "commercial_real_estate"
+    assert result["focus"] == "commercial real estate"
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +257,12 @@ def test_pipeline_run_end_to_end(dirs, tmp_path):
     prompts_dir, schemas_dir = dirs
 
     website_payload = {"website": "https://acme.com", "confidence": "high", "reasoning": "Known"}
-    classifier_payload = {"schema": "general", "confidence": "high", "reasoning": "General co"}
+    classifier_payload = {
+        "schema": "general",
+        "focus": "manufacturing widgets",
+        "confidence": "high",
+        "reasoning": "General co",
+    }
     report_text = "# Acme Corp\n## Overview\nAcme Corp provides widgets."
 
     responses = [
@@ -262,6 +289,7 @@ def test_pipeline_run_end_to_end(dirs, tmp_path):
     assert result["company"] == "Acme Corp"
     assert result["website"] == "https://acme.com"
     assert result["schema"] == "general"
+    assert result["classifier_agent"]["focus"] == "manufacturing widgets"
     assert "Acme" in result["report"]
     assert client.chat.completions.create.call_count == 3
 
