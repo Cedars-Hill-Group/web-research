@@ -1,36 +1,10 @@
-# config.yaml
-google:
-  api_key: 'AIzaSyDfGumvGDzhMRdbH89ncrtRoGChccsOPU0'
-  cx: '80965d42098504797'
-
 openai:
-  api_key: ''          # Set your OpenAI API key here or use OPENAI_API_KEY env var
-  model: 'gpt-4o-mini' # Model to use for all agents
-  max_subpages: 5      # Maximum number of subpages to read per company website
+  api_key: ''              # Set your OpenAI API key here or use OPENAI_API_KEY env var
+  model: 'gpt-4o-mini'     # Model to use for all agents
+  max_subpages: 5          # Maximum number of subpages to read per company website
   schemas_dir: 'schemas'   # Directory containing schema markdown files
   prompts_dir: 'prompts'   # Directory containing agent prompt markdown files
 
-scrape:
-  max_links: 50
-  allow_external: false
-  headless: false
-  user_agent: "Mozilla/5.0 CopilotResearchBot/1.0"
-
 storage:
   base_dir: "data/companies"
-
-filters:
-  include_paths:
-    - "/about"
-    - "/investors"
-    - "/news"
-    - "/solutions"
-    - "/transactions"
-
-cleaning:
-  remove_selectors:
-    - "script"
-    - "style"
-    - "nav"
-    - "footer"
-  collapse_whitespace: true
+  database_dir: "company_markdown_db/companies"

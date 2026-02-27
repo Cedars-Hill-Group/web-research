@@ -1,5 +1,8 @@
 venv
 *.envrc
+# Project-local runtime/cache artifacts
+**/__pycache__/
+.ruff_cache/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

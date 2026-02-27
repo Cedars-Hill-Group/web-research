@@ -1,185 +1,87 @@
-# Company Research — Web Scraping & Markdown Export
+# Company Research — Multi-Agent AI Pipeline
 
-A small toolset for quickly finding company websites, browsing them in a lightweight browser interface, marking pages to scrape, and exporting cleaned Markdown files with helpful metadata.
+This project is now an **AI-only company research system** powered by a multi-agent OpenAI workflow.
+It no longer includes manual scraping, browser/TUI workflows, or Selenium-based navigation.
 
----
+## What it does
 
-## 🔍 What it does
+- Identifies a company website with `WebsiteAgent`
+- Classifies the company against available schemas with `ClassifierAgent`
+- Generates a structured markdown report with `AnalystAgent`
+- Saves reports to `data/companies/<Company>/markdown` with YAML metadata
+- Optionally merges generated markdown into a flat DB using `scripts/merge_markdown_db.py`
 
-- Search for a company's official site and present candidate pages.
-- Use a browser-driven TUI to open pages and *scrape* the current page using the TUI action (press **g** to "Scrape current page").
-- Convert marked pages to cleaned Markdown suitable for note-taking or importing into personal knowledge bases.
-- Provide batch processing (from `companies.csv`) and a merge tool to append scraped content into a flat company database.
+## Architecture
 
----
-
-## ✅ Key features
-
-- Robust HTML-to-Markdown pipeline in `src/convert.py` using Readability + heuristics to remove boilerplate and preserve useful sections such as team/press when detected.
-- Metadata written into YAML front matter: `website`, `date`, `focus`.
-- Interactive TUI (`src/ui_tui.py`) for scraping, previewing, and saving pages.
-- Batch mode (`companies.csv`) with optional per-company focus prompting, and a merge tool to consolidate markdown into `company_markdown_db/companies/`.
-- **AI Research mode** — multi-agent OpenAI pipeline that identifies a company's website, classifies the company, and generates a structured Markdown report using customisable schema files (see [docs/OPENAI_INTEGRATION.md](docs/OPENAI_INTEGRATION.md)).
-
----
-
-## Repository layout
-
-```
-.
-├── README.md
-├── requirements.txt
-├── config.yaml            # filters, scrape options, and OpenAI settings
-├── companies.csv          # optional CSV with company names for batch runs
-├── prompts/               # agent system prompts (Markdown, editable)
-├── schemas/               # company type schemas (Markdown, editable/extensible)
-├── scripts/               # helper scripts (merge tool, demos)
-├── data/                  # saved raw HTML + markdown per company
-├── docs/                  # additional documentation
-├── src/                   # application code
-└── tests/                 # unit tests
-```
-
----
+- `src/openai_agent.py` — core multi-agent pipeline
+- `src/main.py` — AI interactive and AI batch runners
+- `prompts/` — editable system prompts per agent
+- `schemas/` — editable markdown schemas for classification + output structure
+- `src/store.py` — markdown/front-matter persistence
+- `scripts/merge_markdown_db.py` and `scripts/merge_existing_data.py` — post-processing merge tools
 
 ## Installation
 
-1. Create a Python virtual environment and activate it:
-
-   ```bash
-   python -m venv .venv
-   .\.venv\Scripts\activate     # Windows
-   source .venv/bin/activate      # macOS/Linux
-   ```
-
-2. Install requirements:
-
-   ```bash
-   python -m pip install -r requirements.txt
-   ```
-
-3. (Optional) Install `pytest` for running tests:
-
-   ```bash
-   python -m pip install pytest
-   ```
-
----
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate
+python -m pip install -r requirements.txt
+```
 
 ## Configuration
 
-Edit `config.yaml` to set filters and user-agent options for scraping. Example entries:
-
-```yaml
-scrape:
-  user_agent: "MyScraper/1.0"
-filters:
-  include_paths: ["/team", "/about", "/press"]
-```
-
-For the **AI Research mode** add your OpenAI API key (or set the `OPENAI_API_KEY` environment variable):
+Edit `config.yaml`:
 
 ```yaml
 openai:
-  api_key: 'sk-...'
+  api_key: ''
   model: 'gpt-4o-mini'
   max_subpages: 5
+  schemas_dir: 'schemas'
+  prompts_dir: 'prompts'
+
+storage:
+  base_dir: 'data/companies'
+  database_dir: 'company_markdown_db/companies'
 ```
 
-See [docs/OPENAI_INTEGRATION.md](docs/OPENAI_INTEGRATION.md) for full OpenAI configuration details.
-
----
+You can also set `OPENAI_API_KEY` as an environment variable.
 
 ## Usage
 
-Run the app:
+Run:
 
 ```bash
 python -m src.main
 ```
 
-You will be prompted to choose **Single**, **Batch**, or **AI Research** mode.
+Modes:
 
-### AI Batch mode (OpenAI + companies.csv)
+1. **AI Interactive** — research one company at a time
+2. **AI Batch** — process `companies.csv` end-to-end
 
-Choose option **4** to run AI research for every company in `companies.csv`.
+Both modes support saving reports and appending metadata. Batch mode can remove processed rows from `companies.csv` for resumable runs.
 
-This mode will:
-1. Run the OpenAI website/classifier/analyst pipeline for each company row.
-2. Auto-save each report to `data/companies/<Company>/markdown` with metadata (`website`, `focus`, `firm_type`, `source`, `schema`).
-3. Continue on failures (optional prompt) and print per-company status.
-4. Offer to remove processed rows from `companies.csv` so you can resume later.
-
-### AI Research mode (OpenAI)
-
-Choose option **3** and enter a company name. The pipeline will:
-1. Use OpenAI to identify the company's official website.
-2. Scrape the homepage and up to `max_subpages` sub-pages.
-3. Classify the company and select the appropriate schema.
-4. Generate a structured Markdown report.
-
-You will be offered the option to save the report to the `data/companies/` directory.
-
-When saved from AI Research mode, `website` and `firm_type` are stored in YAML front matter metadata, and any schema field lines for Website/Firm Type are removed from the markdown body to avoid duplicate data.
-
-See [docs/OPENAI_INTEGRATION.md](docs/OPENAI_INTEGRATION.md) for full details, programmatic usage, and how to add custom schemas.
-
-Single mode
-- Enter a company name, pick the candidate site, the TUI will open the site.
-- In the TUI press `g` to scrape the currently-open page, `c` to commit scraped pages, or `f` to save and finish. You'll be prompted for an optional **focus** value when a company is accepted.
-
-Batch mode
-- Populate `companies.csv` with company names (header `company` or `name`).
-- Choose batch mode and optionally set `Prompt for each company` to `y` to confirm results per company.
-- When running batch, you'll be prompted for an optional focus value per company (you can leave it blank to skip).
-
-Scraping from the TUI
-- Use **g** in the TUI to scrape the currently-open page; scraped pages are staged in-session and committed using **c** (or saved&finished with **f**).
-- The in-page 'mark' widget and hotkey have been removed; scraping is explicit via the TUI or programmatically using `fetch_html(driver, url)`.
-
-### TUI Quick Reference (Keybindings) 🔧
-
-- **g** — Scrape the currently-open page (stage it in-session)
-- **l** — List scraped pages in the preview pane
-- **c** — Commit scraped pages to disk (writes per-page markdown + raw HTML)
-- **e** — Edit the selected scraped item using your `$EDITOR` (Notepad on Windows)
-- **d** — Delete the selected scraped item from the session
-- **f** — Save & finish (commit then exit)
-- **q** — Quit the TUI without saving
-
-Tip: Use **l** to view staged pages and preview them before editing or deleting; use `fetch_html(driver, url)` for programmatic/headless captures.
-
-Merge tool
-- After you have scraped files, run:
+## Merge generated output
 
 ```bash
 python scripts/merge_markdown_db.py
 ```
 
-This appends unique markdown blocks into `company_markdown_db/companies/<company-slug>.md` using fuzzy matching and de-duplication.
+Merge-only existing files:
 
----
+```bash
+python scripts/merge_existing_data.py
+```
 
 ## Testing
-
-Run the unit tests with:
 
 ```bash
 python -m pytest
 ```
 
-Some integration-like scripts (e.g., `scripts/test_cleaning.py`) skip if sample HTML isn't available.
+For OpenAI pipeline tests only:
 
----
-
-## Contributing
-
-- Add tests for behavior you change.
-- Keep functions small and add documentation for any new heuristics.
-
----
-
-## License
-
-This project is provided under an MIT-style license. See `LICENSE` if present.
-
+```bash
+python -m pytest tests/test_openai_agent.py -v
+```

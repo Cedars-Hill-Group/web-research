@@ -1,7 +1,7 @@
 """Interactive tool to add company markdown files into a centralized database.
 
 Database format (flat):
-- DB_DIR/companies/<company-slug>.md
+- DB_DIR/<company-name>.md
   (one markdown file per company; filename is a slugified company name)
 
 This script will iterate company subfolders under the source directory (default: `data/companies`),
@@ -10,6 +10,9 @@ existing company markdown file in the DB (using fuzzy matching), or create a new
 
 Usage: python scripts/merge_markdown_db.py
 """
+from __future__ import annotations
+
+import argparse
 import difflib
 import re
 from pathlib import Path
@@ -17,9 +20,10 @@ from datetime import datetime
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from src.store import safe_slug, pretty_company_name, pretty_company_name_enhanced, normalize_list_field, append_to_list_field
+from src.config import load_config
 
 SRC_DIR = Path("data/companies")
-DB_DIR = Path("C:\\Obsidian\\Josh's Garden\\Companies")
+DB_DIR = Path("company_markdown_db/companies")
 TEMPLATE_PATH = Path("C:\\Obsidian\\Josh's Garden\\templates\\company template.md")
 
 THRESHOLD = 0.75
@@ -267,8 +271,8 @@ def append_markdown_to_company(src: Path, dst_file: Path, company_display: str |
 
     # Ensure date is always set (use current date if not already present)
     if "date" not in dst_meta:
-        from datetime import datetime, UTC
-        dst_meta["date"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+        from datetime import datetime, timezone
+        dst_meta["date"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
     # Build the addition block and insert under Basic Underwriting
     addition = f"<!-- appended from: {src.name} -->\n\n{src_body}".strip() + "\n"
@@ -280,9 +284,44 @@ def append_markdown_to_company(src: Path, dst_file: Path, company_display: str |
     return True
 
 
+def _resolve_db_dir(cli_db_dir: str | None, config_path: str) -> Path:
+    if cli_db_dir:
+        return Path(cli_db_dir)
+
+    try:
+        cfg = load_config(config_path)
+        configured = (cfg.get("storage") or {}).get("database_dir")
+        if configured:
+            return Path(str(configured))
+    except Exception:
+        pass
+
+    return DB_DIR
+
+
 def main():
-    src = SRC_DIR
-    db = DB_DIR
+    parser = argparse.ArgumentParser(
+        description="Merge markdown under data/companies into a flat markdown DB folder."
+    )
+    parser.add_argument(
+        "--source-dir",
+        default=str(SRC_DIR),
+        help="Root folder containing per-company folders with markdown subfolders.",
+    )
+    parser.add_argument(
+        "--db-dir",
+        default=None,
+        help="Destination database folder. Overrides storage.database_dir from config.yaml.",
+    )
+    parser.add_argument(
+        "--config",
+        default="config.yaml",
+        help="Path to config file used for storage.database_dir default.",
+    )
+    args = parser.parse_args()
+
+    src = Path(args.source_dir)
+    db = _resolve_db_dir(args.db_dir, args.config)
     print(f"Source dir: {src}")
     print(f"DB dir: {db}")
     if not src.exists():
