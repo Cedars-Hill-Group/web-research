@@ -167,3 +167,7 @@ cython_debug/
 # project data
 /data
 /output
+
+# yaml files
+*.yaml
+*.yml
