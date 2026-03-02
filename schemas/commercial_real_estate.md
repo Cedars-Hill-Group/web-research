@@ -6,7 +6,7 @@ Use this schema to describe and summarize companies operating in the commercial 
 - **Company Name**: [Full legal name]
 - **Website**: [Official website URL]
 - **CRE Sector**: [e.g., Lending, Brokerage, Investment/Equity, Development, Advisory, Property Management]
-- **Firm Type**: [e.g., Balance Sheet Lender, Mortgage Broker, REIT, Private Equity, etc.]
+- **Firm Type**: [investor, lender, broker, advisor, REIT, manager, developer]
 - **Founded**: [Year founded, if available]
 - **Headquarters**: [City, State/Country]
 - **Geographic Focus**: [Markets or regions served]
