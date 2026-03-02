@@ -73,6 +73,53 @@ def test_parse_json_response_no_json_raises():
         _parse_json_response("This is just plain text with no JSON.")
 
 
+def test_resolve_openai_api_key_prefers_explicit_key():
+    from src.openai_agent import _resolve_openai_api_key
+
+    with patch.dict("os.environ", {"OPENAI_API_KEY": "env-key"}, clear=True):
+        assert _resolve_openai_api_key(" explicit-key ") == "explicit-key"
+
+
+def test_resolve_openai_api_key_uses_process_env_with_quotes():
+    from src.openai_agent import _resolve_openai_api_key
+
+    with patch.dict("os.environ", {"OPENAI_API_KEY": ' "env-key" '}, clear=True):
+        assert _resolve_openai_api_key(None) == "env-key"
+
+
+def test_resolve_openai_api_key_uses_windows_registry_fallback():
+    from src.openai_agent import _resolve_openai_api_key
+
+    with patch.dict("os.environ", {}, clear=True), \
+         patch("src.openai_agent.os.name", "nt"), \
+         patch("src.openai_agent._read_env_var_from_dotenv", return_value=""), \
+         patch("src.openai_agent._read_windows_env_from_registry", return_value="registry-key"):
+        assert _resolve_openai_api_key(None) == "registry-key"
+
+
+def test_resolve_openai_api_key_uses_dotenv(tmp_path):
+    from src.openai_agent import _resolve_openai_api_key
+
+    (tmp_path / ".env").write_text('OPENAI_API_KEY="dotenv-key"\n', encoding="utf-8")
+
+    with patch.dict("os.environ", {}, clear=True), \
+         patch("src.openai_agent.Path.cwd", return_value=tmp_path), \
+         patch("src.openai_agent._read_windows_env_from_registry", return_value=""):
+        assert _resolve_openai_api_key(None) == "dotenv-key"
+
+
+def test_resolve_openai_api_key_prefers_dotenv_local_over_dotenv(tmp_path):
+    from src.openai_agent import _resolve_openai_api_key
+
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
+    (tmp_path / ".env.local").write_text("OPENAI_API_KEY=dotenv-local-key\n", encoding="utf-8")
+
+    with patch.dict("os.environ", {}, clear=True), \
+         patch("src.openai_agent.Path.cwd", return_value=tmp_path), \
+         patch("src.openai_agent._read_windows_env_from_registry", return_value=""):
+        assert _resolve_openai_api_key(None) == "dotenv-local-key"
+
+
 # ---------------------------------------------------------------------------
 # _list_schemas
 # ---------------------------------------------------------------------------

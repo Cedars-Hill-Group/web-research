@@ -40,6 +40,93 @@ _DEFAULT_HEADERS = {
 _REQUEST_TIMEOUT = 10  # seconds
 
 
+def _normalise_api_key(value: str | None) -> str:
+    if value is None:
+        return ""
+    normalised = str(value).strip().strip('"').strip("'").strip()
+    return normalised
+
+
+def _read_windows_env_from_registry(name: str) -> str:
+    """Read a persisted Windows environment variable directly from registry."""
+    if os.name != "nt":
+        return ""
+
+    try:
+        import winreg  # noqa: PLC0415
+    except ImportError:
+        return ""
+
+    locations = [
+        (winreg.HKEY_CURRENT_USER, r"Environment"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    ]
+    for hive, path in locations:
+        try:
+            with winreg.OpenKey(hive, path) as key:
+                value, _ = winreg.QueryValueEx(key, name)
+        except OSError:
+            continue
+
+        normalised = _normalise_api_key(value)
+        if normalised:
+            return normalised
+
+    return ""
+
+
+def _read_env_var_from_dotenv(name: str) -> str:
+    """Read an environment variable from .env.local or .env in CWD."""
+    for path in (Path.cwd() / ".env.local", Path.cwd() / ".env"):
+        if not path.exists() or not path.is_file():
+            continue
+
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+            if "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            if key.strip() != name:
+                continue
+
+            resolved = _normalise_api_key(value)
+            if resolved:
+                return resolved
+
+    return ""
+
+
+def _resolve_openai_api_key(api_key: str | None = None) -> str:
+    """Resolve API key from explicit arg, env, .env files, and Windows persisted env."""
+    explicit = _normalise_api_key(api_key)
+    if explicit:
+        return explicit
+
+    process_env = _normalise_api_key(os.environ.get("OPENAI_API_KEY", ""))
+    if process_env:
+        return process_env
+
+    dotenv_env = _read_env_var_from_dotenv("OPENAI_API_KEY")
+    if dotenv_env:
+        return dotenv_env
+
+    registry_env = _read_windows_env_from_registry("OPENAI_API_KEY")
+    if registry_env:
+        return registry_env
+
+    return ""
+
+
 def _fetch_page_text(url: str, timeout: int = _REQUEST_TIMEOUT) -> str:
     """Fetch a URL and return cleaned plain-text suitable for an LLM prompt."""
     try:
@@ -138,11 +225,12 @@ def _get_openai_client(api_key: str | None = None):
             "Install it with: pip install openai"
         ) from exc
 
-    key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    key = _resolve_openai_api_key(api_key)
     if not key:
         raise ValueError(
             "An OpenAI API key is required. Set it via the OPENAI_API_KEY "
-            "environment variable or the 'openai.api_key' field in config.yaml."
+            "environment variable, a .env/.env.local file, or the 'openai.api_key' "
+            "field in config.yaml."
         )
     return openai.OpenAI(api_key=key)
 

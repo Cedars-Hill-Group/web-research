@@ -45,7 +45,16 @@ storage:
   database_dir: 'company_markdown_db/companies'
 ```
 
-You can also set `OPENAI_API_KEY` as an environment variable.
+You can also provide `OPENAI_API_KEY` in either of these ways:
+
+- Environment variable (process/user/system)
+- Project `.env.local` or `.env` file in the repo root
+
+Example `.env`:
+
+```env
+OPENAI_API_KEY=sk-your-key-here
+```
 
 ## Usage
 

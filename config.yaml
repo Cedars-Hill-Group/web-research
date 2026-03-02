@@ -6,5 +6,5 @@ openai:
   prompts_dir: 'prompts'   # Directory containing agent prompt markdown files
 
 storage:
-  base_dir: "data/companies"
-  database_dir: "company_markdown_db/companies"
+  base_dir: "Obsidian/Knowledge Base"
+  database_dir: "Companies"
