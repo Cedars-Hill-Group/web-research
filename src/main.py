@@ -49,10 +49,22 @@ def _prompt_missing_ai_metadata(captured: dict[str, str | None]) -> dict[str, st
 
     if not resolved.get("focus"):
         resolved["focus"] = input("Enter focus for this company (leave blank to skip): ").strip() or None
-    if not resolved.get("firm_type"):
+
+    # For firm_type: show AI-inferred value (if any) and let user confirm, edit, or add values.
+    ai_firm_type = resolved.get("firm_type")
+    if ai_firm_type:
+        user_input = input(
+            f"Firm type (AI inferred: {ai_firm_type!r}) - press Enter to keep, or enter new/additional values"
+            " (comma-separated): "
+        ).strip()
+        if user_input:
+            resolved["firm_type"] = user_input
+    else:
         resolved["firm_type"] = input("Enter firm type for this company (leave blank to skip): ").strip() or None
-    if not resolved.get("source"):
-        resolved["source"] = input("Enter source for this company (leave blank to skip): ").strip() or None
+
+    # Source must always be provided by the user; never use a hardcoded default.
+    resolved["source"] = input("Enter source for this company (leave blank to skip): ").strip() or None
+
     if not resolved.get("prop_type"):
         resolved["prop_type"] = input(
             "Enter property type for this company (comma-separated for multiple, leave blank to skip): "
@@ -109,17 +121,30 @@ def _write_remaining_companies(
     print("Updated companies.csv with remaining companies.")
 
 
-def _save_report(company: str, result: dict, context_source: str = "ai-research") -> None:
+def _save_report(
+    company: str,
+    result: dict,
+    *,
+    csv_source: str | None = None,
+    csv_firm_type: str | None = None,
+    interactive: bool = True,
+) -> None:
     website_from_body, firm_type_from_body, cleaned_report = _extract_ai_report_field_lines(result["report"])
     ai_website = website_from_body or result["website"]
     focus_from_agent = _resolve_ai_focus(result.get("classifier_agent", {}), result.get("schema"))
+
+    # Merge AI-inferred firm_type with any CSV-supplied value
+    merged_firm_type = firm_type_from_body
+    if csv_firm_type:
+        from .store import append_to_list_field
+        merged_firm_type = append_to_list_field(firm_type_from_body, csv_firm_type)
 
     dirs = company_dirs("data/companies", company)
     meta = default_metadata(
         website=ai_website,
         focus=focus_from_agent,
-        firm_type=firm_type_from_body,
-        source=context_source,
+        firm_type=merged_firm_type,
+        source=csv_source,
     )
     meta["schema"] = result["schema"]
 
@@ -127,10 +152,13 @@ def _save_report(company: str, result: dict, context_source: str = "ai-research"
     path = write_markdown(dirs["md"], slug, cleaned_report, meta)
     print(f"Report saved to {path}")
 
+    if not interactive:
+        return
+
     captured = {
         "focus": focus_from_agent,
-        "firm_type": firm_type_from_body,
-        "source": context_source,
+        "firm_type": merged_firm_type,
+        "source": None,
         "prop_type": None,
         "loan_type": None,
     }
@@ -215,7 +243,9 @@ def _run_batch(pipeline: CompanyResearchPipeline) -> tuple[list[dict], list[dict
         print(f"\n[{index}/{total}] Researching '{company}'…")
         try:
             result = pipeline.run(company, context)
-            _save_report(company, result)
+            csv_source = (row.get("source") or "").strip() or None
+            csv_firm_type = (row.get("firm_type") or "").strip() or None
+            _save_report(company, result, csv_source=csv_source, csv_firm_type=csv_firm_type, interactive=False)
             print(f"  ✓ Website: {result['website']}")
             print(f"  ✓ Schema:  {result['schema']}")
             processed_rows.append(row)

@@ -62,6 +62,24 @@ Modes:
 
 Both modes support saving reports and appending metadata. Batch mode can remove processed rows from `companies.csv` for resumable runs.
 
+### Metadata fields
+
+| Field | Interactive (single run) | Batch (`companies.csv`) |
+|---|---|---|
+| `source` | Prompted every run — enter a value or leave blank to skip | Provide a `source` column in `companies.csv` |
+| `firm_type` | AI infers a value; you are shown the inferred value and can keep, replace, or add comma-separated values | AI infers a value; optionally provide a `firm_type` column in `companies.csv` to supplement/override |
+
+**Note:** `source` is never populated automatically — it must come from user input or the CSV file.
+
+#### Example `companies.csv`
+
+```csv
+company,source,firm_type
+Acme Capital,newsletter,Debt Fund
+Bright Bridge,conference,Bridge Lender
+Other Co,,
+```
+
 ## Merge generated output
 
 ```bash
