@@ -69,6 +69,17 @@ def normalize_list_field(value):
     return value
 
 
+def _as_list(value):
+    """Ensure a normalized value is always a list (or None).
+
+    Wraps a single string in a list so that single-value fields are stored
+    consistently as lists rather than bare strings.
+    """
+    if value is None:
+        return None
+    return value if isinstance(value, list) else [value]
+
+
 def append_to_list_field(existing, new_value):
     """Append new_value to an existing list field, avoiding duplicates.
     
@@ -189,9 +200,9 @@ def default_metadata(website: str, focus: str | None = None, firm_type: str | No
     meta = {
         "website": ws,
         "date": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-        "focus": normalize_list_field(focus),
-        "firm_type": normalize_list_field(firm_type),
-        "source": normalize_list_field(source),
+        "focus": _as_list(normalize_list_field(focus)),
+        "firm_type": _as_list(normalize_list_field(firm_type)),
+        "source": _as_list(normalize_list_field(source)),
     }
 
     # Only include prop_type when provided (user left blank -> omit field)
@@ -243,6 +254,10 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                     for key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
                         if isinstance(meta.get(key), str) and "," in meta.get(key, ""):
                             meta[key] = normalize_list_field(meta.get(key))
+                    # Ensure focus/firm_type/source are always stored as lists
+                    for key in ("focus", "firm_type", "source"):
+                        if meta.get(key) is not None:
+                            meta[key] = _as_list(meta[key])
 
                     # Preserve existing date if the file has one
                     existing_date = meta.get("date")
@@ -260,11 +275,13 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                         if key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
                             if key in meta and meta.get(key) is not None:
                                 # Append to existing list
-                                meta[key] = append_to_list_field(meta[key], value)
+                                result = append_to_list_field(meta[key], value)
+                                meta[key] = _as_list(result) if key in ("focus", "firm_type", "source") else result
                                 file_changed = True
                             else:
                                 # Field doesn't exist or is None, add new value
-                                meta[key] = normalize_list_field(value)
+                                new_val = normalize_list_field(value)
+                                meta[key] = _as_list(new_val) if key in ("focus", "firm_type", "source") else new_val
                                 if meta[key] is not None:
                                     file_changed = True
                         else:
