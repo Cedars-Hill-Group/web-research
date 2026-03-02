@@ -6,7 +6,8 @@ Database format (flat):
 
 This script will iterate company subfolders under the source directory (default: `data/companies`),
 collect markdown files from each company's `markdown/` folder, then either append their content to an
-existing company markdown file in the DB (using fuzzy matching), or create a new one.
+existing company markdown file in the DB (using probabilistic entity resolution via splink, with a
+difflib fallback), or create a new one.
 
 Usage: python scripts/merge_markdown_db.py
 """
@@ -21,12 +22,15 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from src.store import safe_slug, pretty_company_name, pretty_company_name_enhanced, normalize_list_field, append_to_list_field
 from src.config import load_config
+from src.entity_resolution import resolve_company_name
 
 SRC_DIR = Path("data/companies")
 DB_DIR = Path("company_markdown_db/companies")
 TEMPLATE_PATH = Path("C:\\Obsidian\\Josh's Garden\\templates\\company template.md")
 
 THRESHOLD = 0.75
+# Minimum splink match_probability to surface a candidate as a suggested match
+SPLINK_THRESHOLD = 0.5
 
 
 def _clean_company_filename(name: str, db_dir: Path, preserve_case: bool = False) -> Path:
@@ -89,7 +93,10 @@ def _insert_under_heading(body: str, heading: str, addition: str) -> str:
 
 def choose_match(name: str, candidates: list[str]) -> tuple[str | None, str | None]:
     """Return a tuple of (chosen_candidate_stem, custom_company_name).
-    
+
+    Uses splink probabilistic entity resolution to rank candidates, falling
+    back to difflib when splink is unavailable.
+
     Returns:
         - (candidate_stem, None): Use existing company with that stem
         - (None, custom_name): Create new company with custom name
@@ -97,15 +104,50 @@ def choose_match(name: str, candidates: list[str]) -> tuple[str | None, str | No
     """
     if not candidates:
         return (None, None)
-    best = difflib.get_close_matches(name, candidates, n=1, cutoff=THRESHOLD)
-    close = difflib.get_close_matches(name, candidates, n=5, cutoff=THRESHOLD/2)
 
-    if best:
-        b = best[0]
-        resp = input(f"Found close match in DB: '{b}' for '{name}'. Use it? (y/n): ").strip().lower()
+    # --- Splink-based ranking (primary) ---
+    splink_matches = resolve_company_name(name, candidates, threshold=SPLINK_THRESHOLD)
+    # splink_matches is [(name, prob), ...] sorted by probability descending
+
+    # Also collect lower-confidence splink suggestions for the selection list
+    splink_all = resolve_company_name(name, candidates, threshold=0.0)
+    matched_names = {m for m, _ in splink_matches}
+    close_splink = [n for n, _ in splink_all if n not in matched_names]
+
+    # --- Difflib fallback / supplement ---
+    difflib_best = difflib.get_close_matches(name, candidates, n=1, cutoff=THRESHOLD)
+    difflib_close = difflib.get_close_matches(name, candidates, n=5, cutoff=THRESHOLD / 2)
+
+    # Build a deduplicated ordered list of suggestions:
+    # 1) high-confidence splink matches
+    # 2) remaining splink suggestions (lower confidence)
+    # 3) difflib suggestions not already listed
+    seen: set[str] = set()
+    close: list[str] = []
+    for n in [m for m, _ in splink_matches] + close_splink + difflib_close:
+        if n not in seen:
+            seen.add(n)
+            close.append(n)
+
+    # Determine the top suggestion to present for quick confirmation
+    if splink_matches:
+        top, top_prob = splink_matches[0]
+        label = f"splink match (probability={top_prob:.2f})"
+    elif difflib_best:
+        top = difflib_best[0]
+        label = "difflib match"
+    else:
+        top = None
+        label = ""
+
+    if top:
+        resp = input(
+            f"Found {label} in DB: '{top}' for '{name}'. Use it? (y/n): "
+        ).strip().lower()
         if resp == "y":
-            return (b, None)
-    # fallback: ask user to pick from list or none
+            return (top, None)
+
+    # No automatic match – let the user pick
     print("No suitable automatic match. Candidates:")
     for i, c in enumerate(close, 1):
         print(f"  {i}. {c}")
