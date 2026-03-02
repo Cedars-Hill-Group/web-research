@@ -83,8 +83,8 @@ def test_save_report_batch_uses_csv_source_and_firm_type(tmp_path, monkeypatch):
     parts = content.split("---", 2)
     meta = yaml.safe_load(parts[1])
 
-    assert meta.get("source") == "newsletter"
-    assert meta.get("firm_type") == "Debt Fund"
+    assert meta.get("source") == ["newsletter"]
+    assert meta.get("firm_type") == ["Debt Fund"]
 
 
 def test_save_report_batch_csv_firm_type_merges_with_ai_inferred(tmp_path, monkeypatch):
@@ -128,4 +128,4 @@ def test_save_report_batch_csv_firm_type_merges_with_ai_inferred(tmp_path, monke
         assert "Balance Sheet Lender" in firm_type
         assert "Debt Fund" in firm_type
 
-    assert meta.get("source") == "conference"
+    assert meta.get("source") == ["conference"]
