@@ -180,6 +180,9 @@ def _run_interactive(pipeline: CompanyResearchPipeline) -> list[str]:
     print("\n=== AI Research Mode (Interactive) ===")
     print("This project now runs only on the OpenAI multi-agent research pipeline.\n")
 
+    from .openai_agent import _list_schemas
+    available_schemas = _list_schemas(pipeline._schemas_dir)
+
     processed_companies: list[str] = []
 
     while True:
@@ -187,11 +190,20 @@ def _run_interactive(pipeline: CompanyResearchPipeline) -> list[str]:
         if company.lower() == "q":
             break
 
+        print(f"Available schema classes: {', '.join(available_schemas)}")
+        schema_class = input(
+            "Enter schema class for this company (or press Enter to auto-detect): "
+        ).strip() or None
+
+        if schema_class and schema_class not in available_schemas:
+            print(f"Warning: '{schema_class}' is not a known schema class. Auto-detecting instead.")
+            schema_class = None
+
         context = input("Enter optional context (industry, location, etc.) or press Enter to skip: ").strip()
 
         print(f"\nResearching '{company}'…")
         try:
-            result = pipeline.run(company, context)
+            result = pipeline.run(company, context, schema_class=schema_class)
         except Exception as exc:  # noqa: BLE001
             print(f"Error during research: {exc}")
             continue
@@ -242,7 +254,8 @@ def _run_batch(pipeline: CompanyResearchPipeline) -> tuple[list[dict], list[dict
     for index, (company, row) in enumerate(companies, start=1):
         print(f"\n[{index}/{total}] Researching '{company}'…")
         try:
-            result = pipeline.run(company, context)
+            csv_schema_class = (row.get("schema_class") or "").strip() or None
+            result = pipeline.run(company, context, schema_class=csv_schema_class)
             csv_source = (row.get("source") or "").strip() or None
             csv_firm_type = (row.get("firm_type") or "").strip() or None
             _save_report(company, result, csv_source=csv_source, csv_firm_type=csv_firm_type, interactive=False)

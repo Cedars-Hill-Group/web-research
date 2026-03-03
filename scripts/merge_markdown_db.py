@@ -26,11 +26,40 @@ from src.entity_resolution import resolve_company_name
 
 SRC_DIR = Path("data/companies")
 DB_DIR = Path("company_markdown_db/companies")
-TEMPLATE_PATH = Path("C:\\Obsidian\\Josh's Garden\\templates\\company template.md")
 
 THRESHOLD = 0.75
 # Minimum splink match_probability to surface a candidate as a suggested match
 SPLINK_THRESHOLD = 0.5
+
+
+def _resolve_template(
+    schema_class: str | None,
+    schemas_dir: str | Path | None,
+    fallback_template_path: str | Path | None,
+) -> str | None:
+    """Return template content for a new database file, or ``None`` if unavailable.
+
+    Resolution order:
+    1. ``<schemas_dir>/<schema_class>/template.md`` when both are provided.
+    2. ``fallback_template_path`` when provided and the file exists.
+    """
+    if schemas_dir and schema_class:
+        path = Path(schemas_dir) / schema_class / "template.md"
+        if path.exists():
+            try:
+                return path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                print(f"Warning: could not read template {path}: {exc}")
+
+    if fallback_template_path:
+        path = Path(fallback_template_path)
+        if path.exists():
+            try:
+                return path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                print(f"Warning: could not read fallback template {path}: {exc}")
+
+    return None
 
 
 def _clean_company_filename(name: str, db_dir: Path, preserve_case: bool = False) -> Path:
@@ -219,11 +248,16 @@ def _parse_date(value: str) -> "datetime | None":
         return None
 
 
-def append_markdown_to_company(src: Path, dst_file: Path, company_display: str | None = None) -> bool:
+def append_markdown_to_company(
+    src: Path,
+    dst_file: Path,
+    company_display: str | None = None,
+    template_content: str | None = None,
+) -> bool:
     """Append src markdown into dst_file. Returns True if appended, False if skipped (duplicate).
 
     Behavior changes:
-      - Uses a company template (if present) for new files and inserts scraped content under the
+      - Uses *template_content* (if provided) for new files and inserts scraped content under the
         "Basic Underwriting" heading.
       - Normalizes focus/firm_type to YAML lists when comma-separated.
       - Stores company names in Title Case with spaces (no dashes) in metadata and filenames.
@@ -248,10 +282,9 @@ def append_markdown_to_company(src: Path, dst_file: Path, company_display: str |
             derived_company = pretty_company_name(src.parent.name)
 
     # Load destination metadata/body, preferring the template when creating a new file
-    if (not dst_file.exists() or not dst_text.strip()) and TEMPLATE_PATH.exists():
+    if (not dst_file.exists() or not dst_text.strip()) and template_content:
         try:
-            tpl_text = TEMPLATE_PATH.read_text(encoding="utf-8")
-            dst_meta, dst_body = _parse_front_matter(tpl_text)
+            dst_meta, dst_body = _parse_front_matter(template_content)
         except Exception:
             dst_meta, dst_body = ({}, dst_text)
     else:
@@ -341,6 +374,34 @@ def _resolve_db_dir(cli_db_dir: str | None, config_path: str) -> Path:
     return DB_DIR
 
 
+def _resolve_schemas_dir(cli_schemas_dir: str | None, config_path: str) -> Path | None:
+    if cli_schemas_dir:
+        return Path(cli_schemas_dir)
+
+    try:
+        cfg = load_config(config_path)
+        configured = (cfg.get("openai") or {}).get("schemas_dir")
+        if configured:
+            return Path(str(configured))
+    except Exception:
+        pass
+
+    default = Path("schemas")
+    return default if default.exists() else None
+
+
+def _resolve_fallback_template(config_path: str) -> Path | None:
+    """Return a fallback template path from config.yaml, or None."""
+    try:
+        cfg = load_config(config_path)
+        tpl = (cfg.get("storage") or {}).get("template_path")
+        if tpl:
+            return Path(str(tpl))
+    except Exception:
+        pass
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Merge markdown under data/companies into a flat markdown DB folder."
@@ -356,6 +417,11 @@ def main():
         help="Destination database folder. Overrides storage.database_dir from config.yaml.",
     )
     parser.add_argument(
+        "--schemas-dir",
+        default=None,
+        help="Schemas directory used for schema-class-specific templates. Overrides openai.schemas_dir from config.yaml.",
+    )
+    parser.add_argument(
         "--config",
         default="config.yaml",
         help="Path to config file used for storage.database_dir default.",
@@ -364,8 +430,12 @@ def main():
 
     src = Path(args.source_dir)
     db = _resolve_db_dir(args.db_dir, args.config)
+    schemas_dir = _resolve_schemas_dir(args.schemas_dir, args.config)
+    fallback_template = _resolve_fallback_template(args.config)
     print(f"Source dir: {src}")
     print(f"DB dir: {db}")
+    if schemas_dir:
+        print(f"Schemas dir: {schemas_dir}")
     if not src.exists():
         print("Source dir does not exist. Exiting.")
         return
@@ -384,16 +454,23 @@ def main():
         if not mdfiles:
             continue
 
-        # attempt to determine a canonical company name from metadata, else dir name
+        # attempt to determine a canonical company name and schema class from metadata
         company_name = None
+        schema_class = None
         for f in mdfiles:
             text = f.read_text(encoding="utf-8")
-            # look for YAML company: field on first 20 lines
+            # look for YAML company: and schema: fields on first 20 lines
             header = "\n".join(text.splitlines()[:20])
             import re
-            m = re.search(r"^company:\s*(.+)$", header, re.I | re.M)
-            if m:
-                company_name = m.group(1).strip()
+            if not company_name:
+                m = re.search(r"^company:\s*(.+)$", header, re.I | re.M)
+                if m:
+                    company_name = m.group(1).strip()
+            if not schema_class:
+                m2 = re.search(r"^schema:\s*(.+)$", header, re.I | re.M)
+                if m2:
+                    schema_class = m2.group(1).strip()
+            if company_name and schema_class:
                 break
         if not company_name:
             company_name = comp_dir.name
@@ -416,10 +493,18 @@ def main():
             print(f"  Skipped company: {company_name}")
             continue
 
+        # Resolve the template for this schema class
+        template_content = _resolve_template(schema_class, schemas_dir, fallback_template)
+
         # append files into target file
         appended_count = 0
         for f in mdfiles:
-            appended = append_markdown_to_company(f, target_file, company_display=company_name)
+            appended = append_markdown_to_company(
+                f,
+                target_file,
+                company_display=company_name,
+                template_content=template_content,
+            )
             if appended:
                 print(f"  Appended {f.name} -> {target_file.name}")
                 appended_count += 1
