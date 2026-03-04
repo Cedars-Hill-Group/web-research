@@ -2,9 +2,11 @@ openai:
   api_key: ''              # Set your OpenAI API key here or use OPENAI_API_KEY env var
   model: 'gpt-4o-mini'     # Model to use for all agents
   max_subpages: 5          # Maximum number of subpages to read per company website
-  schemas_dir: 'schemas'   # Directory containing schema markdown files
+  schemas_dir: 'schemas'   # Directory containing schema class subdirectories and prompt files
   prompts_dir: 'prompts'   # Directory containing agent prompt markdown files
 
 storage:
   base_dir: "Obsidian/Knowledge Base"
   database_dir: "Companies"
+  # template_path: ""      # Optional: fallback template for new database files (used when
+                           #   no schema-class-specific template exists under schemas_dir)

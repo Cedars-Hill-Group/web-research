@@ -129,3 +129,46 @@ def test_save_report_batch_csv_firm_type_merges_with_ai_inferred(tmp_path, monke
         assert "Debt Fund" in firm_type
 
     assert meta.get("source") == ["conference"]
+
+
+def test_run_batch_reads_schema_class_column(tmp_path, monkeypatch):
+    """Batch mode must pass the schema_class from the CSV to pipeline.run()."""
+    import csv
+    import builtins
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.chdir(tmp_path)
+
+    # Write a companies.csv with a schema_class column
+    csv_path = tmp_path / "companies.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["company", "schema_class"])
+        writer.writeheader()
+        writer.writerow({"company": "CRE Firm", "schema_class": "commercial_real_estate"})
+
+    # Supply enough user answers for the batch prompts (context + continue_on_error)
+    answers = iter(["", "y"])
+    monkeypatch.setattr(builtins, "input", lambda _: next(answers))
+
+    captured_calls: list[dict] = []
+
+    def fake_run(company, context="", schema_class=None):
+        captured_calls.append({"company": company, "schema_class": schema_class})
+        return {
+            "report": "## Overview\nContent.",
+            "website": "https://cre.com",
+            "schema": schema_class or "general",
+            "classifier_agent": {},
+            "structured_output": MagicMock(),
+        }
+
+    fake_pipeline = MagicMock()
+    fake_pipeline.run.side_effect = fake_run
+    fake_pipeline._schemas_dir = tmp_path / "schemas"
+
+    with patch("src.main.CompanyResearchPipeline.from_config", return_value=fake_pipeline):
+        from src.main import _run_batch
+        _run_batch(fake_pipeline)
+
+    assert captured_calls, "pipeline.run() was never called"
+    assert captured_calls[0]["schema_class"] == "commercial_real_estate"

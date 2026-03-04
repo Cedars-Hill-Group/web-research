@@ -24,8 +24,24 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from pydantic import BaseModel, Field
 
 from .config import load_config
+
+
+# ---------------------------------------------------------------------------
+# Structured output model
+# ---------------------------------------------------------------------------
+
+class CompanyResearchOutput(BaseModel):
+    """Structured output from the full company research pipeline."""
+
+    company: str = Field(description="Company name")
+    website: str = Field(default="", description="Resolved company website URL")
+    schema_class: str = Field(default="general", description="Schema class used for analysis")
+    report: str = Field(default="", description="Markdown report produced by the analyst agent")
+    firm_type: str | None = Field(default=None, description="AI-inferred or user-supplied firm type")
+    focus: str | None = Field(default=None, description="Company focus phrase")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -183,20 +199,72 @@ def _load_prompt(prompts_dir: str | Path, filename: str) -> str:
     raise FileNotFoundError(f"Prompt file not found: {path}")
 
 
-def _load_schema(schemas_dir: str | Path, schema_name: str) -> str:
-    """Return the contents of a schema markdown file by schema name."""
-    path = Path(schemas_dir) / f"{schema_name}.md"
-    if path.exists():
-        return path.read_text(encoding="utf-8").strip()
-    raise FileNotFoundError(f"Schema file not found: {path}")
-
-
 def _list_schemas(schemas_dir: str | Path) -> list[str]:
-    """Return a list of available schema names (filename stems)."""
+    """Return a list of available schema class names.
+
+    Schema classes are discovered in two ways (merged, deduplicated):
+    1. Subdirectories of *schemas_dir* that contain an ``extraction.md`` file.
+    2. ``.md`` files in the root of *schemas_dir* (legacy flat-file format).
+    """
     d = Path(schemas_dir)
     if not d.exists():
         return ["general"]
-    return sorted(p.stem for p in d.glob("*.md"))
+    names: set[str] = set()
+    for item in d.iterdir():
+        if item.is_dir() and (item / "extraction.md").exists():
+            names.add(item.name)
+    for f in d.glob("*.md"):
+        names.add(f.stem)
+    return sorted(names) if names else ["general"]
+
+
+def _load_extraction_schema(schemas_dir: str | Path, schema_name: str) -> str:
+    """Return the extraction schema for *schema_name*, with its title line stripped.
+
+    Looks for ``<schemas_dir>/<schema_name>/extraction.md`` first, then falls
+    back to the legacy flat file ``<schemas_dir>/<schema_name>.md``.
+    The leading ``# Heading`` line (if present) is removed so that the schema
+    title does not appear in the analyst prompt or the stored output.
+    """
+    d = Path(schemas_dir)
+    subdir_path = d / schema_name / "extraction.md"
+    flat_path = d / f"{schema_name}.md"
+
+    if subdir_path.exists():
+        content = subdir_path.read_text(encoding="utf-8").strip()
+    elif flat_path.exists():
+        content = flat_path.read_text(encoding="utf-8").strip()
+    else:
+        raise FileNotFoundError(f"Extraction schema not found for class: {schema_name!r}")
+
+    # Strip the leading title line (e.g. "# General Company Schema") — level-1 only
+    lines = content.splitlines()
+    if lines and re.match(r"^#\s", lines[0]):
+        lines = lines[1:]
+        while lines and not lines[0].strip():
+            lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _load_output_schema(schemas_dir: str | Path, schema_name: str) -> str | None:
+    """Return the output/format schema for *schema_name*, or ``None`` if absent."""
+    path = Path(schemas_dir) / schema_name / "output.md"
+    if path.exists():
+        return path.read_text(encoding="utf-8").strip()
+    return None
+
+
+def _load_template_for_class(schemas_dir: str | Path, schema_name: str) -> str | None:
+    """Return the database template for *schema_name*, or ``None`` if absent."""
+    path = Path(schemas_dir) / schema_name / "template.md"
+    if path.exists():
+        return path.read_text(encoding="utf-8").strip()
+    return None
+
+
+def _load_schema(schemas_dir: str | Path, schema_name: str) -> str:
+    """Return the extraction schema contents (legacy alias for ``_load_extraction_schema``)."""
+    return _load_extraction_schema(schemas_dir, schema_name)
 
 
 def _parse_json_response(text: str) -> dict[str, Any]:
@@ -343,17 +411,19 @@ class AnalystAgent:
 
         Args:
             company_name: The name of the company.
-            schema_name: The schema to apply (must match a file in schemas_dir).
+            schema_name: The schema class to apply (must match a class in schemas_dir).
             website_content: Scraped text from the company's website.
 
         Returns:
             A Markdown string containing the structured analysis.
         """
-        schema_content = _load_schema(self._schemas_dir, schema_name)
+        extraction_schema = _load_extraction_schema(self._schemas_dir, schema_name)
+        output_schema = _load_output_schema(self._schemas_dir, schema_name)
         system_prompt = _load_prompt(self._prompts_dir, "analyst_agent.md")
         system_prompt = (
             system_prompt
-            .replace("{schema_content}", schema_content)
+            .replace("{schema_content}", extraction_schema)
+            .replace("{output_schema}", output_schema or "")
             .replace("{website_content}", website_content[:6000])
         )
 
@@ -415,21 +485,32 @@ class CompanyResearchPipeline:
             max_subpages=int(oa.get("max_subpages", 5)),
         )
 
-    def run(self, company_name: str, context: str = "") -> dict[str, Any]:
+    def run(
+        self,
+        company_name: str,
+        context: str = "",
+        schema_class: str | None = None,
+    ) -> dict[str, Any]:
         """Run the full research pipeline for *company_name*.
 
         Args:
             company_name: Name of the company to research.
             context: Optional context to help identify the correct company.
+            schema_class: Explicitly specify which schema class to use.  When
+                provided the ClassifierAgent is skipped entirely and the given
+                class is used directly.  Must match a directory name (or legacy
+                flat file stem) in *schemas_dir*.
 
         Returns:
             A dict with keys:
-              - ``company``  : the company name
-              - ``website``  : resolved website URL
-              - ``schema``   : schema used for analysis
-              - ``report``   : Markdown report produced by the analyst agent
-              - ``website_agent``    : raw output from WebsiteAgent
-              - ``classifier_agent`` : raw output from ClassifierAgent
+              - ``company``         : the company name
+              - ``website``         : resolved website URL
+              - ``schema``          : schema class used for analysis
+              - ``report``          : Markdown report produced by the analyst agent
+              - ``website_agent``   : raw output from WebsiteAgent
+              - ``classifier_agent``: raw output from ClassifierAgent (or a stub
+                                      when the classifier was skipped)
+              - ``structured_output``: :class:`CompanyResearchOutput` Pydantic model
         """
         # Step 1 — find the website
         website_result = self._website_agent.run(company_name, context)
@@ -447,12 +528,37 @@ class CompanyResearchPipeline:
                 subpage_text = _fetch_page_text(subpage_url)
                 website_content += f"\n\n=== {subpage_url} ===\n{subpage_text}"
 
-        # Step 3 — classify the company
-        classifier_result = self._classifier_agent.run(company_name, website_content)
-        schema_name = classifier_result.get("schema", "general")
+        # Step 3 — classify the company (skip when schema class is explicit)
+        available = _list_schemas(self._schemas_dir)
+        if schema_class:
+            if schema_class in available:
+                schema_name = schema_class
+                classifier_result: dict[str, Any] = {
+                    "schema": schema_name,
+                    "focus": None,
+                    "confidence": "n/a",
+                    "reasoning": "Schema class explicitly specified by user.",
+                }
+            else:
+                print(
+                    f"Warning: schema_class {schema_class!r} is not a known class "
+                    f"(available: {', '.join(available)}). Auto-detecting instead."
+                )
+                classifier_result = self._classifier_agent.run(company_name, website_content)
+                schema_name = classifier_result.get("schema", "general")
+        else:
+            classifier_result = self._classifier_agent.run(company_name, website_content)
+            schema_name = classifier_result.get("schema", "general")
 
         # Step 4 — generate the analysis
         report = self._analyst_agent.run(company_name, schema_name, website_content)
+
+        structured = CompanyResearchOutput(
+            company=company_name,
+            website=website_url,
+            schema_class=schema_name,
+            report=report,
+        )
 
         return {
             "company": company_name,
@@ -461,4 +567,5 @@ class CompanyResearchPipeline:
             "report": report,
             "website_agent": website_result,
             "classifier_agent": classifier_result,
+            "structured_output": structured,
         }

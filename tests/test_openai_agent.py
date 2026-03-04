@@ -36,7 +36,7 @@ def dirs(tmp_path):
     )
     _write(
         prompts / "analyst_agent.md",
-        "Schema:\n{schema_content}\n\nContent:\n{website_content}\n\nAnalyse the company.",
+        "Schema:\n{schema_content}\n\nOutput Format:\n{output_schema}\n\nContent:\n{website_content}\n\nAnalyse the company.",
     )
     _write(schemas / "general.md", "# General Schema\n## Overview\n## Products")
     _write(
@@ -164,7 +164,10 @@ def test_load_schema(dirs):
 
     _, schemas_dir = dirs
     schema = _load_schema(schemas_dir, "general")
-    assert "General Schema" in schema
+    # Title line is stripped; both heading content must still be present
+    assert "General Schema" not in schema
+    assert "Overview" in schema
+    assert "Products" in schema
 
 
 def test_load_schema_missing_raises(tmp_path):
@@ -172,6 +175,101 @@ def test_load_schema_missing_raises(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         _load_schema(tmp_path, "nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# _load_extraction_schema / _load_output_schema / _load_template_for_class
+# ---------------------------------------------------------------------------
+
+def test_load_extraction_schema_subdirectory(tmp_path):
+    from src.openai_agent import _load_extraction_schema
+
+    schemas = tmp_path / "schemas"
+    cls_dir = schemas / "my_class"
+    cls_dir.mkdir(parents=True)
+    (cls_dir / "extraction.md").write_text(
+        "# My Class Title\n\nExtraction details here.", encoding="utf-8"
+    )
+
+    result = _load_extraction_schema(schemas, "my_class")
+    # Title should be stripped
+    assert "My Class Title" not in result
+    assert "Extraction details here" in result
+
+
+def test_load_extraction_schema_flat_file_fallback(tmp_path):
+    from src.openai_agent import _load_extraction_schema
+
+    (tmp_path / "flat_schema.md").write_text(
+        "# Flat Schema Title\n\nFlat content.", encoding="utf-8"
+    )
+
+    result = _load_extraction_schema(tmp_path, "flat_schema")
+    assert "Flat Schema Title" not in result
+    assert "Flat content" in result
+
+
+def test_load_extraction_schema_missing_raises(tmp_path):
+    from src.openai_agent import _load_extraction_schema
+
+    with pytest.raises(FileNotFoundError):
+        _load_extraction_schema(tmp_path, "nonexistent")
+
+
+def test_load_output_schema_present(tmp_path):
+    from src.openai_agent import _load_output_schema
+
+    cls_dir = tmp_path / "my_class"
+    cls_dir.mkdir()
+    (cls_dir / "output.md").write_text("## Overview\n[summary]", encoding="utf-8")
+
+    result = _load_output_schema(tmp_path, "my_class")
+    assert result is not None
+    assert "Overview" in result
+
+
+def test_load_output_schema_absent_returns_none(tmp_path):
+    from src.openai_agent import _load_output_schema
+
+    result = _load_output_schema(tmp_path, "nonexistent")
+    assert result is None
+
+
+def test_load_template_for_class_present(tmp_path):
+    from src.openai_agent import _load_template_for_class
+
+    cls_dir = tmp_path / "my_class"
+    cls_dir.mkdir()
+    (cls_dir / "template.md").write_text("---\nwebsite:\n---\n## Basic Underwriting\n", encoding="utf-8")
+
+    result = _load_template_for_class(tmp_path, "my_class")
+    assert result is not None
+    assert "Basic Underwriting" in result
+
+
+def test_load_template_for_class_absent_returns_none(tmp_path):
+    from src.openai_agent import _load_template_for_class
+
+    result = _load_template_for_class(tmp_path, "nonexistent")
+    assert result is None
+
+
+def test_list_schemas_discovers_subdirectories(tmp_path):
+    from src.openai_agent import _list_schemas
+
+    (tmp_path / "subdir_class").mkdir()
+    (tmp_path / "subdir_class" / "extraction.md").write_text("content", encoding="utf-8")
+
+    schemas = _list_schemas(tmp_path)
+    assert "subdir_class" in schemas
+
+
+def test_list_schemas_ignores_subdirectory_without_extraction(tmp_path):
+    from src.openai_agent import _list_schemas
+
+    (tmp_path / "empty_dir").mkdir()
+    schemas = _list_schemas(tmp_path)
+    assert "empty_dir" not in schemas
 
 
 # ---------------------------------------------------------------------------
@@ -364,3 +462,77 @@ def test_pipeline_from_config(dirs, tmp_path):
 
     assert pipeline._model == "gpt-4o-mini"
     assert pipeline._max_subpages == 2
+
+
+def test_pipeline_run_explicit_schema_class_skips_classifier(dirs):
+    """When schema_class is explicitly provided, ClassifierAgent must not be called."""
+    from src.openai_agent import CompanyResearchPipeline
+
+    prompts_dir, schemas_dir = dirs
+
+    website_payload = {"website": "https://cre.com", "confidence": "high", "reasoning": "Known"}
+    report_text = "## Overview\nCRE firm."
+
+    responses = [
+        _mock_chat_response(json.dumps(website_payload)),
+        _mock_chat_response(report_text),  # analyst only – no classifier call
+    ]
+    client = MagicMock()
+    client.chat.completions.create.side_effect = responses
+
+    with patch("src.openai_agent._get_openai_client", return_value=client), \
+         patch("src.openai_agent._fetch_page_text", return_value="CRE content."), \
+         patch("src.openai_agent._collect_subpage_urls", return_value=[]):
+
+        pipeline = CompanyResearchPipeline(
+            api_key="test-key",
+            model="gpt-4o-mini",
+            prompts_dir=prompts_dir,
+            schemas_dir=schemas_dir,
+            max_subpages=0,
+        )
+        result = pipeline.run("CRE Corp", schema_class="commercial_real_estate")
+
+    assert result["schema"] == "commercial_real_estate"
+    assert result["classifier_agent"]["reasoning"] == "Schema class explicitly specified by user."
+    # Only 2 API calls: website agent + analyst agent (no classifier)
+    assert client.chat.completions.create.call_count == 2
+
+
+def test_pipeline_run_returns_structured_output(dirs):
+    """pipeline.run() must include a 'structured_output' key with a CompanyResearchOutput."""
+    from src.openai_agent import CompanyResearchPipeline, CompanyResearchOutput
+
+    prompts_dir, schemas_dir = dirs
+
+    website_payload = {"website": "https://acme.com", "confidence": "high", "reasoning": "Known"}
+    classifier_payload = {"schema": "general", "focus": "widgets", "confidence": "high", "reasoning": ""}
+    report_text = "## Overview\nAcme makes widgets."
+
+    responses = [
+        _mock_chat_response(json.dumps(website_payload)),
+        _mock_chat_response(json.dumps(classifier_payload)),
+        _mock_chat_response(report_text),
+    ]
+    client = MagicMock()
+    client.chat.completions.create.side_effect = responses
+
+    with patch("src.openai_agent._get_openai_client", return_value=client), \
+         patch("src.openai_agent._fetch_page_text", return_value="Acme makes widgets."), \
+         patch("src.openai_agent._collect_subpage_urls", return_value=[]):
+
+        pipeline = CompanyResearchPipeline(
+            api_key="test-key",
+            model="gpt-4o-mini",
+            prompts_dir=prompts_dir,
+            schemas_dir=schemas_dir,
+            max_subpages=0,
+        )
+        result = pipeline.run("Acme Corp")
+
+    so = result["structured_output"]
+    assert isinstance(so, CompanyResearchOutput)
+    assert so.company == "Acme Corp"
+    assert so.website == "https://acme.com"
+    assert so.schema_class == "general"
+    assert "widgets" in so.report
