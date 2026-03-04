@@ -17,7 +17,7 @@ import argparse
 import difflib
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from src.store import safe_slug, pretty_company_name, pretty_company_name_enhanced, normalize_list_field, append_to_list_field
@@ -320,7 +320,6 @@ def append_markdown_to_company(
                 dst_d = _parse_date(dst_meta.get("date"))
                 src_d = _parse_date(v)
                 if dst_d and src_d:
-                    from datetime import timezone
                     def _ts(dt):
                         if dt.tzinfo is None:
                             dt = dt.replace(tzinfo=timezone.utc)
@@ -346,11 +345,11 @@ def append_markdown_to_company(
 
     # Ensure date is always set (use current date if not already present)
     if "date" not in dst_meta:
-        from datetime import datetime, timezone
         dst_meta["date"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
     # Build the addition block and insert under Basic Underwriting
-    addition = f"<!-- appended from: {src.name} -->\n\n{src_body}".strip() + "\n"
+    appended_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    addition = f"<!-- appended from: {src.name} on {appended_date} -->\n\n{src_body}".strip() + "\n"
     dst_body = _insert_under_heading(dst_body, "Basic Underwriting", addition)
 
     # Ensure dst dir exists and write updated file with front matter
