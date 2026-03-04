@@ -1,5 +1,6 @@
 from pathlib import Path
 from scripts.merge_markdown_db import append_markdown_to_company, _resolve_template
+import re
 import yaml
 
 
@@ -97,3 +98,20 @@ def test_resolve_template_falls_back_to_path(tmp_path):
 def test_resolve_template_returns_none_when_unavailable(tmp_path):
     result = _resolve_template(None, tmp_path, None)
     assert result is None
+
+
+def test_appended_comment_includes_date(tmp_path):
+    """The <!-- appended from: ... --> tag should include a date stamp."""
+    src_md = tmp_path / 'source.md'
+    src_md.write_text(
+        "---\nwebsite: https://example.com/\n---\n\nContent here.\n",
+        encoding='utf-8',
+    )
+    dst = tmp_path / 'dst.md'
+
+    appended = append_markdown_to_company(src_md, dst)
+    assert appended
+
+    content = dst.read_text(encoding='utf-8')
+    # Tag should match "<!-- appended from: source.md on YYYY-MM-DD -->"
+    assert re.search(r'<!-- appended from: source\.md on \d{4}-\d{2}-\d{2} -->', content)
