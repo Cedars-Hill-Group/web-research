@@ -34,7 +34,7 @@ Run `python -m src.main` and choose one mode:
 from src.openai_agent import CompanyResearchPipeline
 
 pipeline = CompanyResearchPipeline.from_config()
-result = pipeline.run("Acme Lending", context="commercial real estate lender")
+result = pipeline.run("Acme Lending", schema_class="commercial_real_estate")
 
 print(result["website"])
 print(result["schema"])
@@ -46,6 +46,8 @@ print(result["report"])
 - Agent prompts are in `prompts/`
 - Output schemas are in `schemas/`
 - New schema files are auto-discovered by filename stem
+
+For full flow and module-level internals, see `docs/ARCHITECTURE.md`.
 
 ## Output
 

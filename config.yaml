@@ -6,7 +6,6 @@ openai:
   prompts_dir: 'prompts'   # Directory containing agent prompt markdown files
 
 storage:
-  base_dir: "Obsidian/Knowledge Base"
-  database_dir: "Companies"
+  database_dir: "C:/Obsidian/Knowledge Base/Companies"
   # template_path: ""      # Optional: fallback template for new database files (used when
                            #   no schema-class-specific template exists under schemas_dir)

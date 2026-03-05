@@ -5,10 +5,8 @@ import tempfile
 from pathlib import Path
 import yaml
 from src.store import (
-    write_markdown, 
     update_metadata_in_files, 
     append_to_list_field,
-    normalize_list_field
 )
 
 
@@ -84,8 +82,8 @@ def test_update_metadata_in_files():
         assert "Healthcare" in updated_meta["focus"], "New focus value missing"
         print("  ✓ Focus was appended:", updated_meta["focus"])
         
-        # Firm_type should be added (was None)
-        assert updated_meta["firm_type"] == "Venture Capital", f"Expected 'Venture Capital', got {updated_meta['firm_type']}"
+        # Firm_type should be added (was None) and stored as a normalized list
+        assert updated_meta["firm_type"] == ["Venture Capital"], f"Expected ['Venture Capital'], got {updated_meta['firm_type']}"
         print("  ✓ Firm_type was added:", updated_meta["firm_type"])
         
         # Date should be preserved

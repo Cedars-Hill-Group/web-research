@@ -1,40 +1,90 @@
 from __future__ import annotations
 
 import csv
+import re
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from typing import Any, Iterable
 
 from .openai_agent import CompanyResearchPipeline
-from .store import company_dirs, default_metadata, safe_slug, update_metadata_in_files, write_markdown
+from .config import resolve_storage_paths
+from .store import (
+    append_to_list_field,
+    company_dirs,
+    default_metadata,
+    safe_slug,
+    update_metadata_in_files,
+    write_markdown,
+)
+
+
+ReportResult = dict[str, Any]
+BatchRunResult = tuple[list[dict], list[dict], list[str], list[str] | None]
+
+_UNAVAILABLE_VALUES = {"not available", "n/a", "na"}
+_WEBSITE_LINE_RE = re.compile(
+    r"^\s*[-*]?\s*\*{0,2}\s*website\s*\*{0,2}\s*:\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
+_FIRM_TYPE_LINE_RE = re.compile(
+    r"^\s*[-*]?\s*\*{0,2}\s*firm\s+type\s*\*{0,2}\s*:\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _print_processed_companies(processed_companies: list[str]) -> None:
+    if not processed_companies:
+        return
+    print(f"\nProcessed {len(processed_companies)} company/companies:")
+    for company in processed_companies:
+        print(f"  - {company}")
+
+
+def _is_yes(value: str) -> bool:
+    return value.strip().lower() == "y"
+
+
+def _collect_companies(rows: Iterable[dict]) -> list[tuple[str, dict]]:
+    companies: list[tuple[str, dict]] = []
+    for row in rows:
+        name = (row.get("company") or row.get("name") or "").strip()
+        if name:
+            companies.append((name, row))
+    return companies
+
+
+def _print_research_result(result: ReportResult) -> None:
+    print(f"\n✓ Website identified: {result['website']}")
+    print(f"✓ Schema applied:     {result['schema']}")
+    print(f"✓ Classifier notes:   {result['classifier_agent'].get('reasoning', '')}\n")
+    print("--- Report ---")
+    print(result["report"])
+    print("--------------\n")
 
 
 def _extract_ai_report_field_lines(report: str) -> tuple[str | None, str | None, str]:
+    """Extract website and firm type lines from AI markdown and return cleaned report text."""
     if not report:
         return None, None, ""
-
-    import re
 
     website_value: str | None = None
     firm_type_value: str | None = None
     kept_lines: list[str] = []
 
-    website_line = re.compile(r"^\s*[-*]?\s*\*{0,2}\s*website\s*\*{0,2}\s*:\s*(.+?)\s*$", re.IGNORECASE)
-    firm_type_line = re.compile(r"^\s*[-*]?\s*\*{0,2}\s*firm\s+type\s*\*{0,2}\s*:\s*(.+?)\s*$", re.IGNORECASE)
-
     for line in report.splitlines():
-        website_match = website_line.match(line)
+        website_match = _WEBSITE_LINE_RE.match(line)
         if website_match:
             extracted = website_match.group(1).strip()
-            if extracted and extracted.lower() not in {"not available", "n/a", "na"}:
+            if extracted and extracted.lower() not in _UNAVAILABLE_VALUES:
                 website_value = extracted
             continue
 
-        firm_type_match = firm_type_line.match(line)
+        firm_type_match = _FIRM_TYPE_LINE_RE.match(line)
         if firm_type_match:
             extracted = firm_type_match.group(1).strip()
-            if extracted and extracted.lower() not in {"not available", "n/a", "na"}:
+            if extracted and extracted.lower() not in _UNAVAILABLE_VALUES:
                 firm_type_value = extracted
             continue
 
@@ -45,6 +95,7 @@ def _extract_ai_report_field_lines(report: str) -> tuple[str | None, str | None,
 
 
 def _prompt_missing_ai_metadata(captured: dict[str, str | None]) -> dict[str, str | None]:
+    """Prompt for optional metadata fields that are still missing."""
     resolved = dict(captured)
 
     if not resolved.get("focus"):
@@ -90,6 +141,7 @@ def _resolve_ai_focus(classifier_result: dict, schema_name: str | None) -> str |
 
 
 def _load_companies_csv(path: str = "companies.csv") -> tuple[list[dict], list[str] | None]:
+    """Load companies CSV rows and raw field names."""
     rows: list[dict] = []
     fieldnames: list[str] | None = None
     with open(path, encoding="utf-8", newline="") as fh:
@@ -107,6 +159,7 @@ def _write_remaining_companies(
     fieldnames: list[str] | None,
     path: str = "companies.csv",
 ) -> None:
+    """Rewrite companies CSV after removing rows already processed."""
     backup = f"{path}.bak.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     shutil.copyfile(path, backup)
     print(f"Backup written to {backup}")
@@ -123,12 +176,14 @@ def _write_remaining_companies(
 
 def _save_report(
     company: str,
-    result: dict,
+    result: ReportResult,
     *,
     csv_source: str | None = None,
     csv_firm_type: str | None = None,
     interactive: bool = True,
+    source_dir: str | None = None,
 ) -> None:
+    """Persist one company report and optionally prompt for interactive metadata updates."""
     website_from_body, firm_type_from_body, cleaned_report = _extract_ai_report_field_lines(result["report"])
     ai_website = website_from_body or result["website"]
     focus_from_agent = _resolve_ai_focus(result.get("classifier_agent", {}), result.get("schema"))
@@ -136,10 +191,9 @@ def _save_report(
     # Merge AI-inferred firm_type with any CSV-supplied value
     merged_firm_type = firm_type_from_body
     if csv_firm_type:
-        from .store import append_to_list_field
         merged_firm_type = append_to_list_field(firm_type_from_body, csv_firm_type)
 
-    dirs = company_dirs("data/companies", company)
+    dirs = company_dirs(source_dir or "data/companies", company)
     meta = default_metadata(
         website=ai_website,
         focus=focus_from_agent,
@@ -176,12 +230,12 @@ def _save_report(
             print(f"Updated metadata in {count} file(s).")
 
 
-def _run_interactive(pipeline: CompanyResearchPipeline) -> list[str]:
+def _run_interactive(pipeline: CompanyResearchPipeline, source_dir: str) -> list[str]:
+    """Run interactive single-company research loop."""
     print("\n=== AI Research Mode (Interactive) ===")
     print("This project now runs only on the OpenAI multi-agent research pipeline.\n")
 
-    from .openai_agent import _list_schemas
-    available_schemas = _list_schemas(pipeline._schemas_dir)
+    available_schemas = pipeline.list_schema_classes()
 
     processed_companies: list[str] = []
 
@@ -199,25 +253,18 @@ def _run_interactive(pipeline: CompanyResearchPipeline) -> list[str]:
             print(f"Warning: '{schema_class}' is not a known schema class. Auto-detecting instead.")
             schema_class = None
 
-        context = input("Enter optional context (industry, location, etc.) or press Enter to skip: ").strip()
-
         print(f"\nResearching '{company}'…")
         try:
-            result = pipeline.run(company, context, schema_class=schema_class)
-        except Exception as exc:  # noqa: BLE001
+            result = pipeline.run(company, schema_class=schema_class)
+        except (RuntimeError, ValueError, OSError) as exc:
             print(f"Error during research: {exc}")
             continue
 
-        print(f"\n✓ Website identified: {result['website']}")
-        print(f"✓ Schema applied:     {result['schema']}")
-        print(f"✓ Classifier notes:   {result['classifier_agent'].get('reasoning', '')}\n")
-        print("--- Report ---")
-        print(result["report"])
-        print("--------------\n")
+        _print_research_result(result)
 
         save = input("Save report to markdown file? (y/n): ").strip().lower()
-        if save == "y":
-            _save_report(company, result)
+        if _is_yes(save):
+            _save_report(company, result, source_dir=source_dir)
 
         processed_companies.append(company)
 
@@ -228,23 +275,19 @@ def _run_interactive(pipeline: CompanyResearchPipeline) -> list[str]:
     return processed_companies
 
 
-def _run_batch(pipeline: CompanyResearchPipeline) -> tuple[list[dict], list[dict], list[str], list[str] | None]:
+def _run_batch(pipeline: CompanyResearchPipeline, source_dir: str) -> BatchRunResult:
+    """Run batch research using companies.csv rows."""
     print("\n=== AI Batch Research Mode (companies.csv) ===")
     print("This mode processes each company from companies.csv using the OpenAI pipeline.\n")
 
     rows, fieldnames = _load_companies_csv("companies.csv")
 
-    companies: list[tuple[str, dict]] = []
-    for row in rows:
-        name = (row.get("company") or row.get("name") or "").strip()
-        if name:
-            companies.append((name, row))
+    companies = _collect_companies(rows)
 
     if not companies:
         print("No companies loaded from companies.csv. Exiting.")
         return rows, [], [], fieldnames
 
-    context = input("Enter optional context to apply to all companies (or press Enter to skip): ").strip()
     continue_on_error = input("Continue to next company if one fails? (y/n): ").strip().lower() != "n"
 
     processed_rows: list[dict] = []
@@ -255,15 +298,22 @@ def _run_batch(pipeline: CompanyResearchPipeline) -> tuple[list[dict], list[dict
         print(f"\n[{index}/{total}] Researching '{company}'…")
         try:
             csv_schema_class = (row.get("schema_class") or "").strip() or None
-            result = pipeline.run(company, context, schema_class=csv_schema_class)
+            result = pipeline.run(company, schema_class=csv_schema_class)
             csv_source = (row.get("source") or "").strip() or None
             csv_firm_type = (row.get("firm_type") or "").strip() or None
-            _save_report(company, result, csv_source=csv_source, csv_firm_type=csv_firm_type, interactive=False)
+            _save_report(
+                company,
+                result,
+                csv_source=csv_source,
+                csv_firm_type=csv_firm_type,
+                interactive=False,
+                source_dir=source_dir,
+            )
             print(f"  ✓ Website: {result['website']}")
             print(f"  ✓ Schema:  {result['schema']}")
             processed_rows.append(row)
             processed_companies.append(company)
-        except Exception as exc:  # noqa: BLE001
+        except (RuntimeError, ValueError, OSError) as exc:
             print(f"  ✗ Failed: {exc}")
             if not continue_on_error:
                 print("Stopping batch due to error.")
@@ -273,28 +323,29 @@ def _run_batch(pipeline: CompanyResearchPipeline) -> tuple[list[dict], list[dict
 
 
 def run() -> None:
+    """CLI entry point for interactive and batch research modes."""
     try:
         pipeline = CompanyResearchPipeline.from_config()
     except (ImportError, ValueError) as exc:
         print(f"Error initialising OpenAI pipeline: {exc}")
         return
 
+    storage = resolve_storage_paths("config.yaml")
+    source_dir = str(storage["source_dir"])
+
     mode = input("Choose mode - (1) AI Interactive, (2) AI Batch from companies.csv: ").strip()
 
     if mode == "2":
         try:
-            rows, processed_rows, processed_companies, fieldnames = _run_batch(pipeline)
+            rows, processed_rows, processed_companies, fieldnames = _run_batch(pipeline, source_dir)
         except FileNotFoundError:
             print("companies.csv not found.")
             return
 
+        _print_processed_companies(processed_companies)
         if processed_companies:
-            print(f"\nProcessed {len(processed_companies)} company/companies:")
-            for company in processed_companies:
-                print(f"  - {company}")
-
             resp = input("Remove processed companies from companies.csv so you can resume later? (y/n): ").strip().lower()
-            if resp == "y":
+            if _is_yes(resp):
                 try:
                     _write_remaining_companies(
                         all_rows=rows,
@@ -302,19 +353,15 @@ def run() -> None:
                         fieldnames=fieldnames,
                         path="companies.csv",
                     )
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, ValueError, RuntimeError) as exc:
                     print(f"Failed to update companies.csv: {exc}")
     else:
-        processed_companies = _run_interactive(pipeline)
-
-        if processed_companies:
-            print(f"\nProcessed {len(processed_companies)} company/companies:")
-            for company in processed_companies:
-                print(f"  - {company}")
+        processed_companies = _run_interactive(pipeline, source_dir)
+        _print_processed_companies(processed_companies)
 
     resp = input("\nRun merge tool to add markdown files to DB now? (y/n): ").strip().lower()
-    if resp == "y":
-        subprocess.run([sys.executable, "scripts/merge_markdown_db.py"], check=False)
+    if _is_yes(resp):
+        subprocess.run([sys.executable, "scripts/merge_markdown_db.py", "--config", "config.yaml"], check=False)
 
 
 if __name__ == "__main__":

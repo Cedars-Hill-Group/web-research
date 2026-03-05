@@ -1,28 +1,77 @@
-# Company Research — Multi-Agent AI Pipeline
+# Company Research — AI Multi-Agent Pipeline
 
-This project is an **AI-only company research system** powered by a multi-agent OpenAI workflow. It no longer includes manual scraping, browser/TUI workflows, or Selenium-based navigation.
+This repository researches companies using an OpenAI multi-agent workflow, stores structured markdown reports, and merges those reports into a flat markdown database.
 
-## What it does
+Detailed internals are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-1. Identifies a company's official website with `WebsiteAgent`
-2. Classifies the company into a **schema class** with `ClassifierAgent` (skipped when you specify the class explicitly)
-3. Generates a structured Markdown report with `AnalystAgent`, guided by a **two-schema system** (extraction + output format)
-4. Saves reports to `data/companies/<Company>/markdown/` with YAML metadata
-5. Optionally merges generated Markdown files into a flat database using `scripts/merge_markdown_db.py`, initialising new database entries from a **per-class template**
+## Overview
 
-## Architecture
+The pipeline has three AI stages:
+1. `WebsiteAgent` resolves the official company website.
+2. `ClassifierAgent` chooses a schema class (unless you provide one explicitly).
+3. `AnalystAgent` produces a structured markdown report using schema instructions.
 
-| File | Purpose |
+Outputs are written under `data/companies/<Company>/markdown/` with YAML front matter metadata. Merge utilities then consolidate per-company files into one database markdown file per company.
+
+## Repository Structure
+
+### Core source (`src/`)
+
+| Path | Responsibility |
 |---|---|
-| `src/openai_agent.py` | Core multi-agent pipeline; exports `CompanyResearchPipeline` and `CompanyResearchOutput` |
-| `src/main.py` | Interactive and batch runners |
-| `prompts/` | Editable system prompts for each agent |
-| `schemas/` | Schema class directories (see below) |
-| `src/store.py` | Markdown/front-matter persistence helpers |
-| `scripts/merge_markdown_db.py` | Merge tool: adds per-company Markdown into a flat DB |
-| `scripts/merge_existing_data.py` | Merge-only tool for already-existing Markdown files |
+| `src/main.py` | CLI entrypoint for interactive and batch research modes |
+| `src/openai_agent.py` | Agent implementations + `CompanyResearchPipeline` orchestration |
+| `src/store.py` | Markdown/front-matter read-write helpers and metadata normalization |
+| `src/config.py` | Configuration loading and storage path resolution |
+| `src/entity_resolution.py` | Matching logic used by merge flows |
 
----
+### Prompt and schema content
+
+| Path | Responsibility |
+|---|---|
+| `prompts/` | Agent system prompts (`website_agent.md`, `classifier_agent.md`, `analyst_agent.md`) |
+| `schemas/<class>/extraction.md` | What information to extract |
+| `schemas/<class>/output.md` | How to format report output |
+| `schemas/<class>/template.md` | Base template for new DB entries |
+
+### Merge and utility scripts (`scripts/`)
+
+| Path | Responsibility |
+|---|---|
+| `scripts/merge_markdown_db.py` | Merge researched markdown into DB interactively |
+| `scripts/merge_existing_data.py` | Merge-only mode for pre-existing markdown data |
+
+### Tests
+
+- `tests/` contains the main automated test suite.
+- Root-level `test_*.py` files exist for targeted/legacy scenarios and compatibility checks.
+
+## Workflow and Logic
+
+### 1) Research phase (`python -m src.main`)
+
+For each company:
+1. Resolve website from company name.
+2. Fetch homepage + subpage text.
+3. Determine schema class (auto or explicit).
+4. Generate markdown report with schema-driven structure.
+5. Save report with metadata YAML in `data/companies/.../markdown/`.
+
+Important logic notes:
+- `source` metadata is never auto-guessed; it must come from user input (interactive) or CSV (`batch`).
+- `firm_type` is merged when both AI and CSV values exist.
+- List-like fields (`focus`, `firm_type`, `source`, etc.) are normalized for consistent YAML output.
+
+### 2) Merge phase (`scripts/merge_markdown_db.py` or `scripts/merge_existing_data.py`)
+
+For each company folder under the configured source directory:
+1. Detect company identity against existing DB files.
+2. Choose/create destination markdown file.
+3. Resolve schema template (class template first, fallback template second).
+4. Append new content while preserving/merging metadata.
+5. Remove processed source folder (unless keep-source mode is enabled).
+
+Entity matching uses probabilistic linkage when available, with deterministic fallback behavior when optional dependencies are missing.
 
 ## Installation
 
@@ -33,151 +82,71 @@ source .venv/bin/activate       # macOS / Linux
 python -m pip install -r requirements.txt
 ```
 
----
-
 ## Configuration
 
 Edit `config.yaml`:
 
 ```yaml
 openai:
-  api_key: ''              # or set OPENAI_API_KEY environment variable
+  api_key: ''
   model: 'gpt-4o-mini'
   max_subpages: 5
-  schemas_dir: 'schemas'   # directory containing schema class subdirectories
-  prompts_dir: 'prompts'   # directory containing agent prompt markdown files
+  schemas_dir: 'schemas'
+  prompts_dir: 'prompts'
 
 storage:
-  base_dir: 'data/companies'
   database_dir: 'company_markdown_db/companies'
-  # template_path: ''      # optional fallback template for new database files
+  # template_path: ''
 ```
 
-You can supply `OPENAI_API_KEY` via:
+Path resolution rules:
+- Source reports are always read/written under `data/companies`.
+- `storage.database_dir` controls DB output path.
+- Relative paths resolve from the config file directory.
+- Absolute paths are used directly.
 
-- Environment variable
-- `.env.local` or `.env` file in the repo root
+OpenAI API key sources (in priority order):
+1. Explicit config value
+2. `OPENAI_API_KEY` environment variable
+3. `.env.local` / `.env`
+4. Windows persisted environment variable
 
----
+## Schema System
 
-## Schema Classes — Two-Schema System
+Each schema class directory can include:
+- `extraction.md` (required): extraction instructions
+- `output.md` (recommended): section/output format contract
+- `template.md` (recommended): new DB file layout
 
-Each **schema class** is a subdirectory under `schemas/` that contains up to three files:
+Example layout:
 
-```
+```text
 schemas/
   general/
-    extraction.md   ← what data to extract from the company website
-    output.md       ← how to format / structure the stored Markdown
-    template.md     ← template used when creating a new database file
+    extraction.md
+    output.md
+    template.md
   commercial_real_estate/
     extraction.md
     output.md
     template.md
 ```
 
-### `extraction.md` — extraction schema
-
-Instructs the `AnalystAgent` on **what information to gather** from the company's website. Write this as a list of sections and bullet points describing the fields you want extracted. The title line (any `# Heading` at the top) is stripped automatically before it is injected into the agent prompt.
-
-Example (`schemas/commercial_real_estate/extraction.md`):
-
-```markdown
-Use this schema to extract information about CRE companies.
-
-## Company Overview
-- **Firm Type**: [investor, lender, broker, advisor, REIT, developer]
-- **Geographic Focus**: [markets or regions served]
-
-## Loan Programs / Investment Strategies
-[describe loan types, LTV, deal sizes]
-...
-```
-
-### `output.md` — output format schema
-
-Instructs the `AnalystAgent` on **how to structure and format its output**. This controls the section headings that appear in the stored Markdown report.
-
-Example (`schemas/commercial_real_estate/output.md`):
-
-```markdown
-## Overview
-[1–2 sentence summary]
-
-## Description
-[2–3 paragraph narrative]
-
-## Loan Programs / Investment Strategies
-[deal structures and specifics]
-
-## Property Types
-- [type 1]
-- [type 2]
-```
-
-### `template.md` — database template
-
-The template that is used when **creating a new database file** for a company. It should contain the YAML front-matter fields you want pre-populated (left blank) and the section headings for the database entry. New research content is inserted under the `## Basic Underwriting` heading.
-
-Example (`schemas/commercial_real_estate/template.md`):
-
-```markdown
----
-website:
-date:
-focus:
-firm_type:
-source:
-schema:
-prop_type:
-loan_type:
----
-
-## Basic Underwriting
-
-## Overview
-
-## Description
-
-## Loan Programs / Investment Strategies
-
-## Property Types
-
-## Loan / Deal Size
-```
-
-### Adding a new schema class
-
-1. Create a new subdirectory under `schemas/`, e.g. `schemas/private_equity/`
-2. Add `extraction.md` (required), `output.md` (recommended), and `template.md` (recommended)
-3. The new class is automatically available for selection in interactive and batch modes
-
----
+To add a new schema class, create a new subdirectory with these files.
 
 ## Usage
+
+### Interactive mode
 
 ```bash
 python -m src.main
 ```
 
-### Mode 1 — AI Interactive (single company)
+Choose mode `1` and enter company names one at a time.
 
-```
-=== AI Research Mode (Interactive) ===
+### Batch mode (CSV)
 
-Enter company name (or 'q' to quit): Acme Capital
-Available schema classes: commercial_real_estate, general
-Enter schema class for this company (or press Enter to auto-detect): commercial_real_estate
-Enter optional context (industry, location, etc.) or press Enter to skip:
-```
-
-- You are shown the list of available schema classes and can choose one directly.
-- If you press **Enter** without typing a class, the `ClassifierAgent` automatically picks the best match based on the company's website content.
-- The optional context prompt remains available and is passed to the `WebsiteAgent` to help identify the correct company website.
-
-### Mode 2 — AI Batch (CSV file)
-
-Create `companies.csv` in the project root:
+Create `companies.csv`:
 
 ```csv
 company,source,firm_type,schema_class
@@ -187,39 +156,48 @@ Startup Inc,,,general
 Other Co,,,
 ```
 
-| Column | Description |
-|---|---|
-| `company` | **Required.** Company name to research |
-| `source` | Optional. Written into the `source` metadata field |
-| `firm_type` | Optional. Merged with any AI-inferred firm type |
-| `schema_class` | Optional. Explicitly set the schema class; if blank the ClassifierAgent auto-detects |
+Column semantics:
+- `company` (required)
+- `source` (optional metadata)
+- `firm_type` (optional; merged with AI value)
+- `schema_class` (optional; if omitted classifier auto-detects)
 
-Run:
+Run and choose mode `2`:
 
 ```bash
 python -m src.main
-# Choose option 2
 ```
 
-After processing you are asked whether to remove processed rows from `companies.csv` (for resumable batch runs).
+### Merge researched markdown into database
 
----
+```bash
+python scripts/merge_markdown_db.py --config config.yaml
+```
 
-## Metadata fields
+### Merge only existing markdown data
 
-| Field | Interactive | Batch (`companies.csv`) |
-|---|---|---|
-| `source` | Prompted every run | Provide a `source` column |
-| `firm_type` | AI infers; you can keep, replace, or extend | AI infers; optionally override with `firm_type` column |
-| `schema_class` | You choose at the prompt (or auto-detect) | Provide a `schema_class` column |
+```bash
+python scripts/merge_existing_data.py --config config.yaml
+```
 
-**Note:** `source` is never populated automatically — it must come from user input or the CSV.
+Keep source folders after merge:
 
----
+```bash
+python scripts/merge_existing_data.py --keep-merged-source --config config.yaml
+```
 
-## Structured Output
+## Programmatic API
 
-`CompanyResearchPipeline.run()` returns a dict that includes a `structured_output` key containing a `CompanyResearchOutput` Pydantic model:
+`CompanyResearchPipeline.run()` returns a dict with key fields:
+- `company`
+- `website`
+- `schema`
+- `report`
+- `website_agent`
+- `classifier_agent`
+- `structured_output` (`CompanyResearchOutput` Pydantic model)
+
+Example:
 
 ```python
 from src.openai_agent import CompanyResearchPipeline
@@ -227,56 +205,35 @@ from src.openai_agent import CompanyResearchPipeline
 pipeline = CompanyResearchPipeline.from_config()
 result = pipeline.run("Acme Corp", schema_class="commercial_real_estate")
 
-out = result["structured_output"]  # CompanyResearchOutput
-print(out.company)      # "Acme Corp"
-print(out.website)      # resolved URL
-print(out.schema_class) # "commercial_real_estate"
-print(out.report)       # Markdown report
+structured = result["structured_output"]
+print(structured.company)
+print(structured.website)
+print(structured.schema_class)
 ```
-
----
-
-## Merge generated output into the database
-
-```bash
-python scripts/merge_markdown_db.py
-```
-
-The merge tool:
-1. Reads source files from `data/companies/<Company>/markdown/`
-2. Reads the `schema:` field from each source file's YAML front matter
-3. For **new** database entries, loads `schemas/<schema_class>/template.md` as the initial file content
-4. Inserts research content under the `## Basic Underwriting` heading
-5. Merges YAML metadata (appending list fields like `firm_type` and `focus`)
-
-To merge existing Markdown files without re-running research:
-
-```bash
-python scripts/merge_existing_data.py
-```
-
-### Custom template fallback
-
-If you want a single fallback template for all schema classes (e.g. an Obsidian vault template), set `storage.template_path` in `config.yaml`:
-
-```yaml
-storage:
-  template_path: '/path/to/my/vault/templates/company template.md'
-```
-
-The per-class template (`schemas/<class>/template.md`) always takes priority over this fallback.
-
----
 
 ## Testing
 
+Run full suite:
+
 ```bash
-python -m pytest
+python -m pytest -q
 ```
 
-For OpenAI pipeline tests only:
+Run a focused module:
 
 ```bash
 python -m pytest tests/test_openai_agent.py -v
 ```
+
+## Additional Docs
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): execution flow, module responsibilities, and data model
+- [docs/OPENAI_INTEGRATION.md](docs/OPENAI_INTEGRATION.md): quick OpenAI-specific integration notes
+
+## Troubleshooting
+
+- `companies.csv not found`: ensure the file exists in project root when using batch mode.
+- No API key error: set `OPENAI_API_KEY` or `openai.api_key` in `config.yaml`.
+- No merge output: verify source files exist under `data/companies/<Company>/markdown/`.
+- Unexpected matching behavior during merge: review candidate prompts and schema metadata in source markdown front matter.
 

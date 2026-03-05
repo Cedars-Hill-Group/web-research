@@ -1,8 +1,6 @@
 """Tests for src/entity_resolution.py (splink-based company name matching)."""
 from __future__ import annotations
 
-import pytest
-
 from src.entity_resolution import find_best_match, resolve_company_name
 
 

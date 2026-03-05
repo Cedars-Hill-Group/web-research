@@ -1,7 +1,7 @@
 """Merge-only utility: consolidate existing markdown under data/companies into a DB folder.
 
 This script does not run website search, scraping, or AI research. It only reads
-existing markdown files that already exist under the data directory and merges them
+existing markdown files that already exist under the configured source directory and merges them
 into a flat markdown database using the same merge logic as merge_markdown_db.py.
 
 Usage:
@@ -17,15 +17,17 @@ import argparse
 import re
 import sys
 from pathlib import Path
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import merge_helpers  # noqa: E402
 from scripts.merge_markdown_db import (  # noqa: E402
     append_markdown_to_company,
     choose_match,
     _resolve_template,
 )
-from src.config import load_config  # noqa: E402
+from src.config import load_config, resolve_storage_paths  # noqa: E402
 from src.store import safe_slug, pretty_company_name_enhanced  # noqa: E402
 
 
@@ -51,49 +53,35 @@ def _clean_company_filename(name: str, db_dir: Path, preserve_case: bool = False
 
 def _extract_schema_class(md_files: list[Path]) -> str | None:
     """Extract the schema class from the YAML front matter of the first matching file."""
-    try:
-        import yaml
-    except Exception:
-        return None
-
     for md_file in md_files:
-        try:
-            text = md_file.read_text(encoding="utf-8")
-            if not text.startswith("---"):
-                continue
-            parts = text.split("---", 2)
-            if len(parts) < 3:
-                continue
-            meta = yaml.safe_load(parts[1]) or {}
-            schema = str(meta.get("schema") or "").strip()
-            if schema:
-                return schema
-        except Exception:
+        meta = _load_front_matter_meta(md_file)
+        if not meta:
             continue
+        schema = str(meta.get("schema") or "").strip()
+        if schema:
+            return schema
     return None
 
 
 def _extract_company_name(md_files: list[Path], fallback: str) -> str:
-    try:
-        import yaml
-    except Exception:
-        return fallback
-
     for md_file in md_files:
-        try:
-            text = md_file.read_text(encoding="utf-8")
-            if not text.startswith("---"):
-                continue
-            parts = text.split("---", 2)
-            if len(parts) < 3:
-                continue
-            meta = yaml.safe_load(parts[1]) or {}
-            company = str(meta.get("company") or "").strip()
-            if company:
-                return company
-        except Exception:
+        meta = _load_front_matter_meta(md_file)
+        if not meta:
             continue
+        company = str(meta.get("company") or "").strip()
+        if company:
+            return company
     return fallback
+
+
+def _load_front_matter_meta(md_file: Path) -> dict:
+    try:
+        text = md_file.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    meta, _ = merge_helpers.parse_front_matter(text)
+    return meta if isinstance(meta, dict) else {}
 
 
 def run_merge(
@@ -161,14 +149,18 @@ def run_merge(
 
         if appended_for_company > 0:
             companies_merged += 1
-            if not keep_merged_source:
-                try:
-                    import shutil
 
-                    shutil.rmtree(company_dir)
-                    print(f"  Deleted source folder: {company_dir}")
-                except Exception as exc:
-                    print(f"  Warning: failed to delete {company_dir}: {exc}")
+        if not keep_merged_source:
+            try:
+                import shutil
+
+                shutil.rmtree(company_dir)
+                print(f"  Deleted source folder: {company_dir}")
+                print(f"  Company processing complete; source folder removed: {company_name}")
+            except OSError as exc:
+                print(f"  Warning: failed to delete {company_dir}: {exc}")
+        else:
+            print(f"  Company processing complete; source folder preserved (--keep-merged-source): {company_name}")
 
     print("\nMerge complete.")
     print(f"Companies with markdown found: {companies_seen}")
@@ -179,19 +171,17 @@ def run_merge(
     return 0
 
 
-def _resolve_db_dir(cli_db_dir: str | None, config_path: str) -> Path:
-    if cli_db_dir:
-        return Path(cli_db_dir)
-
-    try:
-        cfg = load_config(config_path)
-        configured = (cfg.get("storage") or {}).get("database_dir")
-        if configured:
-            return Path(str(configured))
-    except Exception:
-        pass
-
-    return Path("company_markdown_db/companies")
+def _resolve_storage_dirs(
+    cli_source_dir: str | None,
+    cli_db_dir: str | None,
+    config_path: str,
+) -> tuple[Path, Path]:
+    resolved = resolve_storage_paths(
+        config_path,
+        source_dir_override=cli_source_dir,
+        database_dir_override=cli_db_dir,
+    )
+    return resolved["source_dir"], resolved["database_dir"]
 
 
 def _resolve_schemas_dir(cli_schemas_dir: str | None, config_path: str) -> Path | None:
@@ -203,7 +193,7 @@ def _resolve_schemas_dir(cli_schemas_dir: str | None, config_path: str) -> Path 
         configured = (cfg.get("openai") or {}).get("schemas_dir")
         if configured:
             return Path(str(configured))
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError, TypeError, yaml.YAMLError):
         pass
 
     default = Path("schemas")
@@ -216,8 +206,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--source-dir",
-        default="data/companies",
-        help="Root folder containing per-company folders with markdown subfolders.",
+        default=None,
+        help="Root folder containing per-company folders with markdown subfolders (defaults to data/companies).",
     )
     parser.add_argument(
         "--db-dir",
@@ -241,8 +231,7 @@ def main() -> int:
     )
 
     args = parser.parse_args()
-    source_dir = Path(args.source_dir)
-    db_dir = _resolve_db_dir(args.db_dir, args.config)
+    source_dir, db_dir = _resolve_storage_dirs(args.source_dir, args.db_dir, args.config)
     schemas_dir = _resolve_schemas_dir(args.schemas_dir, args.config)
 
     print(f"Source: {source_dir}")

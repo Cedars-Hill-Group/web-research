@@ -10,13 +10,85 @@ Key functions:
 
 from __future__ import annotations
 
+import difflib
 import logging
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+_LEGAL_SUFFIXES = {
+    "llc",
+    "l.l.c",
+    "inc",
+    "inc.",
+    "corp",
+    "corp.",
+    "co",
+    "co.",
+    "company",
+    "ltd",
+    "ltd.",
+    "lp",
+    "llp",
+    "pllc",
+    "plc",
+}
+
+
+def _normalise_company_name(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", value.lower())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _strip_legal_suffixes(value: str) -> str:
+    tokens = value.split()
+    while tokens and tokens[-1] in _LEGAL_SUFFIXES:
+        tokens.pop()
+    return " ".join(tokens).strip()
+
+
+def _fallback_similarity(candidate: str, target: str) -> float:
+    c_norm = _normalise_company_name(candidate)
+    t_norm = _normalise_company_name(target)
+
+    if not c_norm or not t_norm:
+        return 0.0
+    if c_norm == t_norm:
+        return 1.0
+
+    c_base = _strip_legal_suffixes(c_norm)
+    t_base = _strip_legal_suffixes(t_norm)
+    if c_base and t_base and c_base == t_base:
+        return 0.97
+
+    seq_score = difflib.SequenceMatcher(a=c_norm, b=t_norm).ratio()
+    base_score = difflib.SequenceMatcher(a=c_base or c_norm, b=t_base or t_norm).ratio()
+
+    c_tokens = set((c_base or c_norm).split())
+    t_tokens = set((t_base or t_norm).split())
+    token_score = (len(c_tokens & t_tokens) / len(c_tokens | t_tokens)) if (c_tokens and t_tokens) else 0.0
+
+    # Weighted blend tuned to keep exact/base matches high while penalising unrelated names.
+    return min(1.0, (0.5 * base_score) + (0.35 * seq_score) + (0.15 * token_score))
+
+
+def _fallback_resolve_company_name(
+    candidate: str,
+    existing: list[str],
+    threshold: float,
+) -> list[tuple[str, float]]:
+    results: list[tuple[str, float]] = []
+    for name in existing:
+        probability = _fallback_similarity(candidate, name)
+        if probability >= threshold:
+            results.append((name, probability))
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
 
 # ---------------------------------------------------------------------------
 # Splink settings
@@ -114,9 +186,9 @@ def resolve_company_name(
         from splink import DuckDBAPI, Linker
     except ImportError:
         logger.warning(
-            "splink or pandas is not installed; entity resolution unavailable."
+            "splink or pandas is not installed; using deterministic fallback matching."
         )
-        return []
+        return _fallback_resolve_company_name(candidate, existing, threshold)
 
     import warnings
 
@@ -142,9 +214,9 @@ def resolve_company_name(
                 threshold_match_probability=threshold
             )
             df_preds = preds.as_pandas_dataframe()
-        except Exception as exc:
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
             logger.warning("splink prediction failed: %s", exc)
-            return []
+            return _fallback_resolve_company_name(candidate, existing, threshold)
 
     if df_preds.empty:
         return []

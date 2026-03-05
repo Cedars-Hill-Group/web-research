@@ -24,6 +24,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from bs4 import FeatureNotFound
 from pydantic import BaseModel, Field
 
 from .config import load_config
@@ -156,7 +157,7 @@ def _fetch_page_text(url: str, timeout: int = _REQUEST_TIMEOUT) -> str:
         # Collapse excessive blank lines
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text[:8000]  # Limit per-page context to keep prompts manageable
-    except Exception as exc:  # noqa: BLE001
+    except (requests.RequestException, OSError, ValueError, FeatureNotFound) as exc:
         return f"[Could not fetch {url}: {exc}]"
 
 
@@ -187,7 +188,7 @@ def _collect_subpage_urls(base_url: str, max_links: int = 5) -> list[str]:
             if len(links) >= max_links:
                 break
         return links
-    except Exception:  # noqa: BLE001
+    except (requests.RequestException, OSError, ValueError, FeatureNotFound):
         return []
 
 
@@ -320,7 +321,7 @@ class WebsiteAgent:
 
         Args:
             company_name: The name of the company to look up.
-            context: Optional additional context (e.g., industry, location).
+            context: Optional context string to bias website resolution.
 
         Returns:
             Dict with ``website``, ``confidence``, and ``reasoning`` keys.
@@ -450,7 +451,7 @@ class CompanyResearchPipeline:
     Usage::
 
         pipeline = CompanyResearchPipeline.from_config()
-        result = pipeline.run("Acme Corp", context="commercial real estate lender")
+        result = pipeline.run("Acme Corp")
         print(result["report"])
     """
 
@@ -485,17 +486,19 @@ class CompanyResearchPipeline:
             max_subpages=int(oa.get("max_subpages", 5)),
         )
 
+    def list_schema_classes(self) -> list[str]:
+        """Return available schema classes configured for this pipeline."""
+        return _list_schemas(self._schemas_dir)
+
     def run(
         self,
         company_name: str,
-        context: str = "",
         schema_class: str | None = None,
     ) -> dict[str, Any]:
         """Run the full research pipeline for *company_name*.
 
         Args:
             company_name: Name of the company to research.
-            context: Optional context to help identify the correct company.
             schema_class: Explicitly specify which schema class to use.  When
                 provided the ClassifierAgent is skipped entirely and the given
                 class is used directly.  Must match a directory name (or legacy
@@ -513,7 +516,8 @@ class CompanyResearchPipeline:
               - ``structured_output``: :class:`CompanyResearchOutput` Pydantic model
         """
         # Step 1 — find the website
-        website_result = self._website_agent.run(company_name, context)
+        website_context = schema_class or ""
+        website_result = self._website_agent.run(company_name, website_context)
         website_url = website_result.get("website", "")
 
         # Step 2 — fetch website content (homepage + subpages)

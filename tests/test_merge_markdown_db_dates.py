@@ -1,5 +1,5 @@
 from pathlib import Path
-from scripts.merge_markdown_db import append_markdown_to_company, _resolve_template
+from scripts.merge_markdown_db import append_markdown_to_company, _resolve_template, choose_match
 import re
 import yaml
 
@@ -27,7 +27,7 @@ def test_preserve_older_date(tmp_path):
 
     appended = append_markdown_to_company(src_md, dst)
     assert appended
-    meta, body = _read_front(dst)
+    meta, _body = _read_front(dst)
     assert meta.get('date').startswith('2025-11-01')
 
 
@@ -70,6 +70,64 @@ def test_append_uses_template_for_new_file(tmp_path):
     assert "## Basic Underwriting" in content
     assert "## Overview" in content
     assert "Research content here" in content
+
+
+def test_append_pairs_source_sections_with_template_headings(tmp_path):
+    src_md = tmp_path / "src_sections.md"
+    src_md.write_text(
+        "---\ncompany: Acme\n---\n\n"
+        "# Acme\n\n"
+        "## Overview\n"
+        "Overview text.\n\n"
+        "## Description\n"
+        "Description text.\n\n"
+        "## Target Market\n"
+        "Target market text.\n",
+        encoding="utf-8",
+    )
+
+    template = (
+        "---\nwebsite:\ndate:\n---\n\n"
+        "## Overview\n\n"
+        "## Description\n\n"
+        "## Products & Services\n\n"
+        "## Target Market\n"
+    )
+    dst = tmp_path / "dst_sections.md"
+
+    appended = append_markdown_to_company(src_md, dst, template_content=template)
+    assert appended
+
+    content = dst.read_text(encoding="utf-8")
+
+    overview_block = content.split("## Overview", 1)[1].split("## Description", 1)[0]
+    description_block = content.split("## Description", 1)[1].split("## Products & Services", 1)[0]
+    target_block = content.split("## Target Market", 1)[1]
+
+    assert "Overview text." in overview_block
+    assert "Description text." in description_block
+    assert "Target market text." in target_block
+
+
+def test_append_unmatched_source_sections_are_preserved(tmp_path):
+    src_md = tmp_path / "src_unmatched.md"
+    src_md.write_text(
+        "---\ncompany: Acme\n---\n\n"
+        "## Unknown Section\n"
+        "Unknown content.\n",
+        encoding="utf-8",
+    )
+
+    template = "---\nwebsite:\n---\n\n## Overview\n\n## Description\n"
+    dst = tmp_path / "dst_unmatched.md"
+
+    appended = append_markdown_to_company(src_md, dst, template_content=template)
+    assert appended
+
+    content = dst.read_text(encoding="utf-8")
+    overview_block = content.split("## Overview", 1)[1].split("## Description", 1)[0]
+    assert "### Unknown Section" in overview_block
+    assert "Unknown content." in overview_block
 
 
 def test_resolve_template_from_schemas_dir(tmp_path):
@@ -115,3 +173,20 @@ def test_appended_comment_includes_date(tmp_path):
     content = dst.read_text(encoding='utf-8')
     # Tag should match "<!-- appended from: source.md on YYYY-MM-DD -->"
     assert re.search(r'<!-- appended from: source\.md on \d{4}-\d{2}-\d{2} -->', content)
+
+
+def test_choose_match_empty_candidates_defaults_to_new(monkeypatch):
+    answers = iter(["", ""])  # accept create, accept suggested company name
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    match, custom_name = choose_match("Acme Capital", [])
+    assert match is None
+    assert custom_name == "Acme Capital"
+
+
+def test_choose_match_empty_candidates_can_skip(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+
+    match, custom_name = choose_match("Acme Capital", [])
+    assert match is None
+    assert custom_name is None

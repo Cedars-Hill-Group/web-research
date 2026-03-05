@@ -20,8 +20,8 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-@pytest.fixture()
-def dirs(tmp_path):
+@pytest.fixture(name="fixture_dirs")
+def _fixture_dirs(tmp_path):
     """Return (prompts_dir, schemas_dir) with minimal fixture files."""
     prompts = tmp_path / "prompts"
     schemas = tmp_path / "schemas"
@@ -124,10 +124,10 @@ def test_resolve_openai_api_key_prefers_dotenv_local_over_dotenv(tmp_path):
 # _list_schemas
 # ---------------------------------------------------------------------------
 
-def test_list_schemas(dirs):
+def test_list_schemas(fixture_dirs):
     from src.openai_agent import _list_schemas
 
-    _, schemas_dir = dirs
+    _, schemas_dir = fixture_dirs
     schemas = _list_schemas(schemas_dir)
     assert "general" in schemas
     assert "commercial_real_estate" in schemas
@@ -144,10 +144,10 @@ def test_list_schemas_missing_dir():
 # _load_prompt / _load_schema
 # ---------------------------------------------------------------------------
 
-def test_load_prompt(dirs):
+def test_load_prompt(fixture_dirs):
     from src.openai_agent import _load_prompt
 
-    prompts_dir, _ = dirs
+    prompts_dir, _ = fixture_dirs
     prompt = _load_prompt(prompts_dir, "website_agent.md")
     assert "website" in prompt.lower()
 
@@ -159,10 +159,10 @@ def test_load_prompt_missing_raises(tmp_path):
         _load_prompt(tmp_path, "nonexistent.md")
 
 
-def test_load_schema(dirs):
+def test_load_schema(fixture_dirs):
     from src.openai_agent import _load_schema
 
-    _, schemas_dir = dirs
+    _, schemas_dir = fixture_dirs
     schema = _load_schema(schemas_dir, "general")
     # Title line is stripped; both heading content must still be present
     assert "General Schema" not in schema
@@ -285,10 +285,10 @@ def _mock_chat_response(content: str):
     return response
 
 
-def test_website_agent_run(dirs):
+def test_website_agent_run(fixture_dirs):
     from src.openai_agent import WebsiteAgent
 
-    prompts_dir, _ = dirs
+    prompts_dir, _ = fixture_dirs
     payload = {"website": "https://acme.com", "confidence": "high", "reasoning": "Known brand"}
     client = MagicMock()
     client.chat.completions.create.return_value = _mock_chat_response(json.dumps(payload))
@@ -301,30 +301,46 @@ def test_website_agent_run(dirs):
     client.chat.completions.create.assert_called_once()
 
 
-def test_website_agent_passes_context(dirs):
+def test_website_agent_prompt_contains_company_name(fixture_dirs):
     from src.openai_agent import WebsiteAgent
 
-    prompts_dir, _ = dirs
+    prompts_dir, _ = fixture_dirs
     payload = {"website": "https://beta.io", "confidence": "medium", "reasoning": "Context match"}
     client = MagicMock()
     client.chat.completions.create.return_value = _mock_chat_response(json.dumps(payload))
 
     agent = WebsiteAgent(client, "gpt-4o-mini", prompts_dir)
-    agent.run("Beta Inc", context="commercial real estate")
+    agent.run("Beta Inc")
 
     call_args = client.chat.completions.create.call_args
     user_msg = call_args.kwargs["messages"][1]["content"]
-    assert "commercial real estate" in user_msg
+    assert "Company name: Beta Inc" in user_msg
+
+
+def test_website_agent_passes_context(fixture_dirs):
+    from src.openai_agent import WebsiteAgent
+
+    prompts_dir, _ = fixture_dirs
+    payload = {"website": "https://beta.io", "confidence": "medium", "reasoning": "Schema hint"}
+    client = MagicMock()
+    client.chat.completions.create.return_value = _mock_chat_response(json.dumps(payload))
+
+    agent = WebsiteAgent(client, "gpt-4o-mini", prompts_dir)
+    agent.run("Beta Inc", context="commercial_real_estate")
+
+    call_args = client.chat.completions.create.call_args
+    user_msg = call_args.kwargs["messages"][1]["content"]
+    assert "Additional context: commercial_real_estate" in user_msg
 
 
 # ---------------------------------------------------------------------------
 # ClassifierAgent
 # ---------------------------------------------------------------------------
 
-def test_classifier_agent_run(dirs):
+def test_classifier_agent_run(fixture_dirs):
     from src.openai_agent import ClassifierAgent
 
-    prompts_dir, schemas_dir = dirs
+    prompts_dir, schemas_dir = fixture_dirs
     payload = {
         "schema": "commercial_real_estate",
         "focus": "commercial real estate lending",
@@ -341,10 +357,10 @@ def test_classifier_agent_run(dirs):
     assert result["focus"] == "commercial real estate lending"
 
 
-def test_classifier_agent_falls_back_to_general(dirs):
+def test_classifier_agent_falls_back_to_general(fixture_dirs):
     from src.openai_agent import ClassifierAgent
 
-    prompts_dir, schemas_dir = dirs
+    prompts_dir, schemas_dir = fixture_dirs
     # Return an unknown schema name
     payload = {"schema": "unknown_schema_xyz", "confidence": "low", "reasoning": "Unclear"}
     client = MagicMock()
@@ -357,10 +373,10 @@ def test_classifier_agent_falls_back_to_general(dirs):
     assert result["focus"] == "general"
 
 
-def test_classifier_agent_focus_falls_back_to_schema_when_missing(dirs):
+def test_classifier_agent_focus_falls_back_to_schema_when_missing(fixture_dirs):
     from src.openai_agent import ClassifierAgent
 
-    prompts_dir, schemas_dir = dirs
+    prompts_dir, schemas_dir = fixture_dirs
     payload = {"schema": "commercial_real_estate", "confidence": "high", "reasoning": "CRE lender"}
     client = MagicMock()
     client.chat.completions.create.return_value = _mock_chat_response(json.dumps(payload))
@@ -376,10 +392,10 @@ def test_classifier_agent_focus_falls_back_to_schema_when_missing(dirs):
 # AnalystAgent
 # ---------------------------------------------------------------------------
 
-def test_analyst_agent_run(dirs):
+def test_analyst_agent_run(fixture_dirs):
     from src.openai_agent import AnalystAgent
 
-    prompts_dir, schemas_dir = dirs
+    prompts_dir, schemas_dir = fixture_dirs
     report_text = "# Acme Corp\n## Overview\nAcme is a great company."
     client = MagicMock()
     client.chat.completions.create.return_value = _mock_chat_response(report_text)
@@ -395,11 +411,11 @@ def test_analyst_agent_run(dirs):
 # CompanyResearchPipeline
 # ---------------------------------------------------------------------------
 
-def test_pipeline_run_end_to_end(dirs, tmp_path):
+def test_pipeline_run_end_to_end(fixture_dirs):
     """Full pipeline run with all external calls mocked."""
     from src.openai_agent import CompanyResearchPipeline
 
-    prompts_dir, schemas_dir = dirs
+    prompts_dir, schemas_dir = fixture_dirs
 
     website_payload = {"website": "https://acme.com", "confidence": "high", "reasoning": "Known"}
     classifier_payload = {
@@ -439,12 +455,12 @@ def test_pipeline_run_end_to_end(dirs, tmp_path):
     assert client.chat.completions.create.call_count == 3
 
 
-def test_pipeline_from_config(dirs, tmp_path):
+def test_pipeline_from_config(fixture_dirs, tmp_path):
     """from_config() reads openai settings from a config file."""
     import yaml
     from src.openai_agent import CompanyResearchPipeline
 
-    prompts_dir, schemas_dir = dirs
+    prompts_dir, schemas_dir = fixture_dirs
     config = {
         "openai": {
             "api_key": "test-key",
@@ -460,15 +476,15 @@ def test_pipeline_from_config(dirs, tmp_path):
     with patch("src.openai_agent._get_openai_client", return_value=MagicMock()):
         pipeline = CompanyResearchPipeline.from_config(config_file)
 
-    assert pipeline._model == "gpt-4o-mini"
-    assert pipeline._max_subpages == 2
+    assert getattr(pipeline, "_model") == "gpt-4o-mini"
+    assert getattr(pipeline, "_max_subpages") == 2
 
 
-def test_pipeline_run_explicit_schema_class_skips_classifier(dirs):
+def test_pipeline_run_explicit_schema_class_skips_classifier(fixture_dirs):
     """When schema_class is explicitly provided, ClassifierAgent must not be called."""
     from src.openai_agent import CompanyResearchPipeline
 
-    prompts_dir, schemas_dir = dirs
+    prompts_dir, schemas_dir = fixture_dirs
 
     website_payload = {"website": "https://cre.com", "confidence": "high", "reasoning": "Known"}
     report_text = "## Overview\nCRE firm."
@@ -495,15 +511,17 @@ def test_pipeline_run_explicit_schema_class_skips_classifier(dirs):
 
     assert result["schema"] == "commercial_real_estate"
     assert result["classifier_agent"]["reasoning"] == "Schema class explicitly specified by user."
+    website_user_msg = client.chat.completions.create.call_args_list[0].kwargs["messages"][1]["content"]
+    assert "Additional context: commercial_real_estate" in website_user_msg
     # Only 2 API calls: website agent + analyst agent (no classifier)
     assert client.chat.completions.create.call_count == 2
 
 
-def test_pipeline_run_returns_structured_output(dirs):
+def test_pipeline_run_returns_structured_output(fixture_dirs):
     """pipeline.run() must include a 'structured_output' key with a CompanyResearchOutput."""
     from src.openai_agent import CompanyResearchPipeline, CompanyResearchOutput
 
-    prompts_dir, schemas_dir = dirs
+    prompts_dir, schemas_dir = fixture_dirs
 
     website_payload = {"website": "https://acme.com", "confidence": "high", "reasoning": "Known"}
     classifier_payload = {"schema": "general", "focus": "widgets", "confidence": "high", "reasoning": ""}

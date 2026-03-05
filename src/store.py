@@ -194,7 +194,7 @@ def default_metadata(website: str, focus: str | None = None, firm_type: str | No
             ws = f"{parsed.scheme}://{parsed.netloc}/"
         else:
             ws = str(website)
-    except Exception:
+    except (ValueError, TypeError):
         ws = str(website)
 
     meta = {
@@ -243,10 +243,9 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
             if text.startswith("---"):
                 parts = text.split("---", 2)
                 if len(parts) >= 3:
-                    import yaml
                     try:
                         meta = yaml.safe_load(parts[1]) or {}
-                    except Exception:
+                    except yaml.YAMLError:
                         meta = {}
                     body = parts[2]
                     
@@ -304,7 +303,7 @@ def update_metadata_in_files(md_dir: Path, updates: dict) -> int:
                         content = f"---\n{fm}---{body}"
                         md_file.write_text(content, encoding="utf-8")
                         updated_count += 1
-        except Exception:
+        except (OSError, ValueError, TypeError, yaml.YAMLError):
             continue
     
     return updated_count

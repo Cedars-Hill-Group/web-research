@@ -4,7 +4,7 @@ Database format (flat):
 - DB_DIR/<company-name>.md
   (one markdown file per company; filename is a slugified company name)
 
-This script will iterate company subfolders under the source directory (default: `data/companies`),
+This script will iterate company subfolders under the source directory (default: `data/companies` in the project),
 collect markdown files from each company's `markdown/` folder, then either append their content to an
 existing company markdown file in the DB (using probabilistic entity resolution via splink, with a
 difflib fallback), or create a new one.
@@ -14,18 +14,16 @@ Usage: python scripts/merge_markdown_db.py
 from __future__ import annotations
 
 import argparse
-import difflib
 import re
 from pathlib import Path
 from datetime import datetime, timezone
+import yaml
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from scripts import merge_helpers
+from scripts import merge_matching
 from src.store import safe_slug, pretty_company_name, pretty_company_name_enhanced, normalize_list_field, append_to_list_field
-from src.config import load_config
-from src.entity_resolution import resolve_company_name
-
-SRC_DIR = Path("data/companies")
-DB_DIR = Path("company_markdown_db/companies")
+from src.config import load_config, resolve_storage_paths
 
 THRESHOLD = 0.75
 # Minimum splink match_probability to surface a candidate as a suggested match
@@ -93,31 +91,23 @@ def _clean_company_filename(name: str, db_dir: Path, preserve_case: bool = False
 
 
 def _insert_under_heading(body: str, heading: str, addition: str) -> str:
-    """Insert the addition under the given markdown heading (case-insensitive)."""
-    if not addition.strip():
-        return body
+    return merge_helpers.insert_under_heading(body, heading, addition)
 
-    lines = body.splitlines()
-    target_idx = None
-    for i, line in enumerate(lines):
-        stripped = line.lstrip('#').strip()
-        if stripped.lower() == heading.lower():
-            target_idx = i
-            break
 
-    addition_block = addition.strip()
+def _normalize_heading(heading: str) -> str:
+    return merge_helpers.normalize_heading(heading)
 
-    if target_idx is None:
-        # create the heading if missing
-        prefix = "\n\n" if body.strip() else ""
-        return f"{body.rstrip()}{prefix}## {heading}\n\n{addition_block}\n"
 
-    insert_at = target_idx + 1
-    while insert_at < len(lines) and lines[insert_at].strip() == "":
-        insert_at += 1
+def _extract_h2_headings(body: str) -> list[str]:
+    return merge_helpers.extract_h2_headings(body)
 
-    new_lines = lines[:insert_at] + ["", addition_block, ""] + lines[insert_at:]
-    return "\n".join(new_lines).strip() + "\n"
+
+def _parse_h2_sections(body: str) -> tuple[str, list[tuple[str, str]]]:
+    return merge_helpers.parse_h2_sections(body)
+
+
+def _insert_source_sections_into_template(dst_body: str, src_body: str, source_tag: str) -> str:
+    return merge_helpers.insert_source_sections_into_template(dst_body, src_body, source_tag)
 
 
 def choose_match(name: str, candidates: list[str]) -> tuple[str | None, str | None]:
@@ -132,120 +122,34 @@ def choose_match(name: str, candidates: list[str]) -> tuple[str | None, str | No
         - (None, None): Skip this company
     """
     if not candidates:
+        print(f"No existing database entries found for '{name}'.")
+        resp = input("Create a new company entry? (Y/n): ").strip().lower()
+        if resp in {"", "y", "yes"}:
+            custom_name = input(
+                f"Enter company name for database (or press Enter to use '{name}'): "
+            ).strip()
+            return (None, custom_name or name)
         return (None, None)
 
-    # --- Splink-based ranking (primary) ---
-    splink_matches = resolve_company_name(name, candidates, threshold=SPLINK_THRESHOLD)
-    # splink_matches is [(name, prob), ...] sorted by probability descending
-
-    # Also collect lower-confidence splink suggestions for the selection list
-    splink_all = resolve_company_name(name, candidates, threshold=0.0)
-    matched_names = {m for m, _ in splink_matches}
-    close_splink = [n for n, _ in splink_all if n not in matched_names]
-
-    # --- Difflib fallback / supplement ---
-    difflib_best = difflib.get_close_matches(name, candidates, n=1, cutoff=THRESHOLD)
-    difflib_close = difflib.get_close_matches(name, candidates, n=5, cutoff=THRESHOLD / 2)
-
-    # Build a deduplicated ordered list of suggestions:
-    # 1) high-confidence splink matches
-    # 2) remaining splink suggestions (lower confidence)
-    # 3) difflib suggestions not already listed
-    seen: set[str] = set()
-    close: list[str] = []
-    for n in [m for m, _ in splink_matches] + close_splink + difflib_close:
-        if n not in seen:
-            seen.add(n)
-            close.append(n)
-
-    # Determine the top suggestion to present for quick confirmation
-    if splink_matches:
-        top, top_prob = splink_matches[0]
-        label = f"splink match (probability={top_prob:.2f})"
-    elif difflib_best:
-        top = difflib_best[0]
-        label = "difflib match"
-    else:
-        top = None
-        label = ""
-
-    if top:
-        resp = input(
-            f"Found {label} in DB: '{top}' for '{name}'. Use it? (y/n): "
-        ).strip().lower()
-        if resp == "y":
-            return (top, None)
-
-    # No automatic match – let the user pick
-    print("No suitable automatic match. Candidates:")
-    for i, c in enumerate(close, 1):
-        print(f"  {i}. {c}")
-    resp = input("Enter number to choose existing, 'n' for new, or 's' to skip: ").strip().lower()
-    if resp == "s":
-        return (None, None)
-    if resp == "n":
-        # Prompt for the company name to save in the database
-        custom_name = input(f"Enter company name for database (or press Enter to use '{name}'): ").strip()
-        if not custom_name:
-            custom_name = name
-        return (None, custom_name)
-    try:
-        idx = int(resp) - 1
-        if 0 <= idx < len(close):
-            return (close[idx], None)
-    except Exception:
-        pass
-    return (None, None)
+    suggestions, top_name, top_label = merge_matching.rank_match_suggestions(
+        name,
+        candidates,
+        threshold=THRESHOLD,
+        splink_threshold=SPLINK_THRESHOLD,
+    )
+    return merge_matching.prompt_user_for_match(name, suggestions, top_name, top_label)
 
 
 def _parse_front_matter(text: str) -> tuple[dict, str]:
-    """Return (meta, body) where meta is a dict (possibly empty) and body is the rest of the file."""
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) >= 3:
-            fm = parts[1]
-            body = parts[2]
-            try:
-                import yaml
-                meta = yaml.safe_load(fm) or {}
-            except Exception:
-                meta = {}
-            return (meta, body)
-    return ({}, text)
+    return merge_helpers.parse_front_matter(text)
 
 
 def _write_with_front_matter(path: Path, meta: dict, body: str) -> None:
-    import yaml
-    fm = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
-    content = f"---\n{fm}---\n{body.lstrip()}"
-    path.write_text(content, encoding="utf-8")
+    merge_helpers.write_with_front_matter(path, meta, body)
 
 
 def _parse_date(value: str) -> "datetime | None":
-    """Attempt to parse an ISO-like date string into a datetime. Return None on failure."""
-    if not value:
-        return None
-    v = str(value).strip()
-    try:
-        # handle trailing Z
-        if v.endswith('Z'):
-            v2 = v[:-1] + '+00:00'
-            from datetime import datetime
-            return datetime.fromisoformat(v2)
-        from datetime import datetime
-        # try full iso
-        return datetime.fromisoformat(v)
-    except Exception:
-        # try date-only yyyy-mm-dd
-        import re
-        m = re.search(r"(\d{4}-\d{2}-\d{2})", v)
-        if m:
-            try:
-                from datetime import datetime
-                return datetime.fromisoformat(m.group(1))
-            except Exception:
-                return None
-        return None
+    return merge_helpers.parse_date(value)
 
 
 def append_markdown_to_company(
@@ -282,11 +186,10 @@ def append_markdown_to_company(
             derived_company = pretty_company_name(src.parent.name)
 
     # Load destination metadata/body, preferring the template when creating a new file
+    creating_new_file_from_template = False
     if (not dst_file.exists() or not dst_text.strip()) and template_content:
-        try:
-            dst_meta, dst_body = _parse_front_matter(template_content)
-        except Exception:
-            dst_meta, dst_body = ({}, dst_text)
+        creating_new_file_from_template = True
+        dst_meta, dst_body = _parse_front_matter(template_content)
     else:
         dst_meta, dst_body = _parse_front_matter(dst_text)
 
@@ -347,10 +250,14 @@ def append_markdown_to_company(
     if "date" not in dst_meta:
         dst_meta["date"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
-    # Build the addition block and insert under Basic Underwriting
+    # Build source tag and append content
     appended_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    addition = f"<!-- appended from: {src.name} on {appended_date} -->\n\n{src_body}".strip() + "\n"
-    dst_body = _insert_under_heading(dst_body, "Basic Underwriting", addition)
+    source_tag = f"<!-- appended from: {src.name} on {appended_date} -->"
+    if creating_new_file_from_template:
+        dst_body = _insert_source_sections_into_template(dst_body, src_body, source_tag)
+    else:
+        addition = f"{source_tag}\n\n{src_body}".strip() + "\n"
+        dst_body = _insert_under_heading(dst_body, "Basic Underwriting", addition)
 
     # Ensure dst dir exists and write updated file with front matter
     dst_file.parent.mkdir(parents=True, exist_ok=True)
@@ -358,19 +265,17 @@ def append_markdown_to_company(
     return True
 
 
-def _resolve_db_dir(cli_db_dir: str | None, config_path: str) -> Path:
-    if cli_db_dir:
-        return Path(cli_db_dir)
-
-    try:
-        cfg = load_config(config_path)
-        configured = (cfg.get("storage") or {}).get("database_dir")
-        if configured:
-            return Path(str(configured))
-    except Exception:
-        pass
-
-    return DB_DIR
+def _resolve_storage_dirs(
+    cli_source_dir: str | None,
+    cli_db_dir: str | None,
+    config_path: str,
+) -> tuple[Path, Path]:
+    resolved = resolve_storage_paths(
+        config_path,
+        source_dir_override=cli_source_dir,
+        database_dir_override=cli_db_dir,
+    )
+    return resolved["source_dir"], resolved["database_dir"]
 
 
 def _resolve_schemas_dir(cli_schemas_dir: str | None, config_path: str) -> Path | None:
@@ -382,7 +287,7 @@ def _resolve_schemas_dir(cli_schemas_dir: str | None, config_path: str) -> Path 
         configured = (cfg.get("openai") or {}).get("schemas_dir")
         if configured:
             return Path(str(configured))
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError, TypeError, yaml.YAMLError):
         pass
 
     default = Path("schemas")
@@ -396,7 +301,7 @@ def _resolve_fallback_template(config_path: str) -> Path | None:
         tpl = (cfg.get("storage") or {}).get("template_path")
         if tpl:
             return Path(str(tpl))
-    except Exception:
+    except (FileNotFoundError, OSError, ValueError, TypeError, yaml.YAMLError):
         pass
     return None
 
@@ -407,8 +312,8 @@ def main():
     )
     parser.add_argument(
         "--source-dir",
-        default=str(SRC_DIR),
-        help="Root folder containing per-company folders with markdown subfolders.",
+        default=None,
+        help="Root folder containing per-company folders with markdown subfolders (defaults to data/companies).",
     )
     parser.add_argument(
         "--db-dir",
@@ -427,8 +332,7 @@ def main():
     )
     args = parser.parse_args()
 
-    src = Path(args.source_dir)
-    db = _resolve_db_dir(args.db_dir, args.config)
+    src, db = _resolve_storage_dirs(args.source_dir, args.db_dir, args.config)
     schemas_dir = _resolve_schemas_dir(args.schemas_dir, args.config)
     fallback_template = _resolve_fallback_template(args.config)
     print(f"Source dir: {src}")
@@ -460,7 +364,6 @@ def main():
             text = f.read_text(encoding="utf-8")
             # look for YAML company: and schema: fields on first 20 lines
             header = "\n".join(text.splitlines()[:20])
-            import re
             if not company_name:
                 m = re.search(r"^company:\s*(.+)$", header, re.I | re.M)
                 if m:
@@ -510,14 +413,14 @@ def main():
             else:
                 print(f"  Skipped (duplicate) {f.name} -> {target_file.name}")
 
-        # Remove the company data folder if any files were successfully merged
-        if appended_count > 0:
-            try:
-                import shutil
-                shutil.rmtree(comp_dir)
-                print(f"  Removed data folder: {comp_dir}")
-            except Exception as e:
-                print(f"  Warning: Could not remove data folder {comp_dir}: {e}")
+        # Remove the company data folder after processing this company
+        try:
+            import shutil
+            shutil.rmtree(comp_dir)
+            print(f"  Removed data folder: {comp_dir}")
+            print(f"  Company processing complete; source folder removed: {company_name}")
+        except OSError as exc:
+            print(f"  Warning: Could not remove data folder {comp_dir}: {exc}")
 
     print("\nMerge complete.")
 

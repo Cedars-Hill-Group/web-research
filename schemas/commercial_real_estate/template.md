@@ -8,8 +8,7 @@ schema:
 prop_type:
 loan_type:
 ---
-
-## Basic Underwriting
+#companies
 
 ## Overview
 

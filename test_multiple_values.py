@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.store import update_metadata_in_files, default_metadata, write_markdown
+from src.store import update_metadata_in_files, default_metadata
 
 
 def test_multiple_values_in_metadata():
@@ -59,7 +59,7 @@ def test_multiple_values_in_metadata():
         md_file.write_text(content, encoding="utf-8")
         
         # Update with comma-separated values
-        count = update_metadata_in_files(md_dir, {
+        update_metadata_in_files(md_dir, {
             "focus": "acquisition, development, asset management",
             "firm_type": "Private Equity, Real Estate Investment Trust",
             "source": "direct research, third party, public filings"
@@ -76,20 +76,19 @@ def test_multiple_values_in_metadata():
         assert len(updated_meta["focus"]) == 3
         assert updated_meta["focus"] == ["acquisition", "development", "asset management"]
         
-        assert isinstance(updated_meta["firm_type"], list), f"firm_type should be a list"
+        assert isinstance(updated_meta["firm_type"], list), "firm_type should be a list"
         assert len(updated_meta["firm_type"]) == 2
         assert updated_meta["firm_type"] == ["Private Equity", "Real Estate Investment Trust"]
         
-        assert isinstance(updated_meta["source"], list), f"source should be a list"
+        assert isinstance(updated_meta["source"], list), "source should be a list"
         assert len(updated_meta["source"]) == 3
         assert updated_meta["source"] == ["direct research", "third party", "public filings"]
         
         print("✓ All fields correctly updated as lists")
         
-        # Test 3: Single values (no commas) should remain as strings
-        print("\n[TEST 3] Testing single values remain as strings...")
+        # Test 3: Single values (no commas) are normalized to one-item lists
+        print("\n[TEST 3] Testing single values are normalized to one-item lists...")
         
-        md_file2 = md_dir / "test2.md"
         single_meta = default_metadata(
             "https://single.com/",
             focus="commercial real estate",
@@ -100,16 +99,16 @@ def test_multiple_values_in_metadata():
         print("Single value metadata:")
         print(yaml.safe_dump(single_meta, default_flow_style=False))
         
-        assert isinstance(single_meta["focus"], str), f"Single focus should be string, got {type(single_meta['focus'])}"
-        assert single_meta["focus"] == "commercial real estate"
+        assert isinstance(single_meta["focus"], list), f"Single focus should be list, got {type(single_meta['focus'])}"
+        assert single_meta["focus"] == ["commercial real estate"]
         
-        assert isinstance(single_meta["firm_type"], str), f"Single firm_type should be string"
-        assert single_meta["firm_type"] == "LLC"
+        assert isinstance(single_meta["firm_type"], list), "Single firm_type should be list"
+        assert single_meta["firm_type"] == ["LLC"]
         
-        assert isinstance(single_meta["source"], str), f"Single source should be string"
-        assert single_meta["source"] == "web"
+        assert isinstance(single_meta["source"], list), "Single source should be list"
+        assert single_meta["source"] == ["web"]
         
-        print("✓ Single values correctly remain as strings")
+        print("✓ Single values correctly normalize to one-item lists")
         
         print("\n" + "=" * 70)
         print("✅ All tests passed!")
