@@ -78,3 +78,19 @@ def test_prompt_user_for_match_select_index(monkeypatch):
 
     assert match == "Acme Partners"
     assert custom_name is None
+
+
+def test_prompt_user_for_match_limits_selection_to_top_ten(monkeypatch):
+    answers = iter(["11"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    suggestions = [f"Candidate {i}" for i in range(1, 13)]
+    match, custom_name = merge_matching.prompt_user_for_match(
+        "Acme Capital",
+        suggestions,
+        None,
+        "",
+    )
+
+    assert match is None
+    assert custom_name is None

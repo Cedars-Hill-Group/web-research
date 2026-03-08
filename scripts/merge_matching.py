@@ -5,6 +5,9 @@ import difflib
 from src.entity_resolution import resolve_company_name
 
 
+MAX_PROMPT_CANDIDATES = 10
+
+
 def rank_match_suggestions(
     name: str,
     candidates: list[str],
@@ -54,8 +57,16 @@ def prompt_user_for_match(
         if confirm == "y":
             return top_name, None
 
-    print("No suitable automatic match. Candidates:")
-    for index, candidate_name in enumerate(suggestions, start=1):
+    selectable_suggestions = suggestions[:MAX_PROMPT_CANDIDATES]
+
+    if len(suggestions) > MAX_PROMPT_CANDIDATES:
+        print(
+            f"No suitable automatic match. Candidates (showing top {MAX_PROMPT_CANDIDATES} of {len(suggestions)}):"
+        )
+    else:
+        print("No suitable automatic match. Candidates:")
+
+    for index, candidate_name in enumerate(selectable_suggestions, start=1):
         print(f"  {index}. {candidate_name}")
 
     response = input("Enter number to choose existing, 'n' for new, or 's' to skip: ").strip().lower()
@@ -68,8 +79,8 @@ def prompt_user_for_match(
 
     try:
         selected_index = int(response) - 1
-        if 0 <= selected_index < len(suggestions):
-            return suggestions[selected_index], None
+        if 0 <= selected_index < len(selectable_suggestions):
+            return selectable_suggestions[selected_index], None
     except ValueError:
         pass
 
