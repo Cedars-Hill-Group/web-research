@@ -1,1 +1,0 @@
-Summarize this company based on their website. Determine if they are a balance sheet lender or a broker/advisor. If a lender provide a summary of their lending programs.
