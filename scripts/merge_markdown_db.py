@@ -26,6 +26,7 @@ import argparse
 import re
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Any
 import yaml
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -39,7 +40,7 @@ THRESHOLD = 0.75
 SPLINK_THRESHOLD = 0.5
 
 
-def _build_company_repo(db_dir: Path):
+def _build_company_repo(db_dir: Path) -> Any | None:
     """Load existing KB company markdown files into a :class:`CompanyRepository`.
 
     Uses :func:`~scripts.merge_matching.build_company_repo_from_db` so that
@@ -133,7 +134,7 @@ def _insert_source_sections_into_template(dst_body: str, src_body: str, source_t
     return merge_helpers.insert_source_sections_into_template(dst_body, src_body, source_tag)
 
 
-def choose_match(name: str, candidates: list[str], *, repo=None, website: str | None = None) -> tuple[str | None, str | None]:
+def choose_match(name: str, candidates: list[str], *, repo: Any | None = None, website: str | None = None) -> tuple[str | None, str | None]:
     """Return a tuple of (chosen_candidate_stem, custom_company_name).
 
     Applies entity resolution in three tiers:

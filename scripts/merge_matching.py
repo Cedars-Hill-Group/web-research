@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+from typing import Any
 
 from src.entity_resolution import resolve_company_name
 
@@ -8,7 +9,7 @@ from src.entity_resolution import resolve_company_name
 MAX_PROMPT_CANDIDATES = 10
 
 
-def build_company_repo_from_db(db_dir):
+def build_company_repo_from_db(db_dir: Any) -> Any | None:
     """Load existing KB company files into a :class:`CompanyRepository`.
 
     Uses :class:`~data_platform.knowledge_base.reader.KnowledgeBaseReader` to
@@ -46,7 +47,7 @@ def build_company_repo_from_db(db_dir):
 def resolve_with_company_repo(
     name: str,
     website: str | None,
-    repo,
+    repo: Any,
 ) -> tuple[str | None, str]:
     """Try deterministic entity resolution via :class:`CompanyRepository`.
 
@@ -92,7 +93,7 @@ def rank_match_suggestions(
     *,
     threshold: float,
     splink_threshold: float,
-    repo=None,
+    repo: Any | None = None,
     website: str | None = None,
 ) -> tuple[list[str], str | None, str]:
     """Return ranked suggestions plus optional top suggestion and label.
