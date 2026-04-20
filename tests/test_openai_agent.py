@@ -448,7 +448,7 @@ def test_pipeline_run_end_to_end(fixture_dirs):
         result = pipeline.run("Acme Corp")
 
     assert result["company"] == "Acme Corp"
-    assert result["website"] == "https://acme.com"
+    assert result["website"] == "https://acme.com/"
     assert result["schema"] == "general"
     assert result["classifier_agent"]["focus"] == "manufacturing widgets"
     assert "Acme" in result["report"]
@@ -551,6 +551,6 @@ def test_pipeline_run_returns_structured_output(fixture_dirs):
     so = result["structured_output"]
     assert isinstance(so, CompanyResearchOutput)
     assert so.company == "Acme Corp"
-    assert so.website == "https://acme.com"
+    assert so.website == "https://acme.com/"
     assert so.schema_class == "general"
     assert "widgets" in so.report

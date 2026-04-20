@@ -192,6 +192,26 @@ def _collect_subpage_urls(base_url: str, max_links: int = 5) -> list[str]:
         return []
 
 
+def _normalise_homepage_url(url: str) -> str:
+    """Return the scheme+netloc root of *url* (strips path, query, fragment).
+
+    Ensures that the URL stored as a company's canonical website is always
+    the homepage root and not a redirect-target deep-link.  For example,
+    ``https://amstar.com/about?ref=foo`` becomes ``https://amstar.com/``.
+
+    If the URL has no scheme, ``https://`` is prepended before parsing.
+    Non-parseable inputs are returned unchanged.
+    """
+    if not url:
+        return url
+    if "://" not in url:
+        url = "https://" + url
+    parsed = urlparse(url)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}/"
+    return url
+
+
 def _load_prompt(prompts_dir: str | Path, filename: str) -> str:
     """Read a prompt markdown file and return its contents."""
     path = Path(prompts_dir) / filename
@@ -519,6 +539,11 @@ class CompanyResearchPipeline:
         website_context = schema_class or ""
         website_result = self._website_agent.run(company_name, website_context)
         website_url = website_result.get("website", "")
+        # Normalise to canonical homepage root before scraping and storing so
+        # the URL in metadata always reflects the root domain, not a redirect
+        # target or deep-link path (fixes Issue #13).
+        if website_url:
+            website_url = _normalise_homepage_url(website_url)
 
         # Step 2 — fetch website content (homepage + subpages)
         website_content = ""

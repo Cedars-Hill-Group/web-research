@@ -4,10 +4,19 @@ Database format (flat):
 - DB_DIR/<company-name>.md
   (one markdown file per company; filename is a slugified company name)
 
-This script will iterate company subfolders under the source directory (default: `data/companies` in the project),
-collect markdown files from each company's `markdown/` folder, then either append their content to an
-existing company markdown file in the DB (using probabilistic entity resolution via splink, with a
-difflib fallback), or create a new one.
+This script iterates company subfolders under the source directory (default:
+``data/companies`` in the project), collects markdown files from each company's
+``markdown/`` folder, then either appends their content to an existing company
+markdown file in the DB or creates a new one.
+
+Entity resolution uses three tiers (Issue #17):
+
+1. **Deterministic** — when ``data-platform`` is installed, the existing KB
+   companies are loaded into a
+   :class:`~data_platform.repositories.companies.CompanyRepository` which
+   resolves by website domain then normalised name.
+2. **Probabilistic** — splink Jaro-Winkler matching with a difflib fallback.
+3. **Interactive** — the user confirms, picks, creates, or skips.
 
 Usage: python scripts/merge_markdown_db.py
 """
@@ -28,6 +37,20 @@ from src.config import load_config, resolve_storage_paths
 THRESHOLD = 0.75
 # Minimum splink match_probability to surface a candidate as a suggested match
 SPLINK_THRESHOLD = 0.5
+
+
+def _build_company_repo(db_dir: Path):
+    """Load existing KB company markdown files into a :class:`CompanyRepository`.
+
+    Uses :func:`~scripts.merge_matching.build_company_repo_from_db` so that
+    entity resolution in the merge flow can use the tiered deterministic
+    matching strategy (website domain → normalised name) provided by
+    data-platform before falling back to splink probabilistic matching.
+
+    Returns ``None`` when ``data-platform`` is not installed, leaving the
+    existing splink/difflib behaviour fully intact.
+    """
+    return merge_matching.build_company_repo_from_db(db_dir)
 
 
 def _resolve_template(
@@ -110,11 +133,19 @@ def _insert_source_sections_into_template(dst_body: str, src_body: str, source_t
     return merge_helpers.insert_source_sections_into_template(dst_body, src_body, source_tag)
 
 
-def choose_match(name: str, candidates: list[str]) -> tuple[str | None, str | None]:
+def choose_match(name: str, candidates: list[str], *, repo=None, website: str | None = None) -> tuple[str | None, str | None]:
     """Return a tuple of (chosen_candidate_stem, custom_company_name).
 
-    Uses splink probabilistic entity resolution to rank candidates, falling
-    back to difflib when splink is unavailable.
+    Applies entity resolution in three tiers:
+
+    1. **Deterministic** — when *repo* (a
+       :class:`~data_platform.repositories.companies.CompanyRepository`) is
+       provided, tries website-domain and normalised-name matching first
+       (Issue #17).
+    2. **Probabilistic** — splink Jaro-Winkler matching with a difflib
+       fallback when splink is unavailable.
+    3. **Interactive** — presents candidates to the user and lets them
+       confirm, choose, create, or skip.
 
     Returns:
         - (candidate_stem, None): Use existing company with that stem
@@ -136,6 +167,8 @@ def choose_match(name: str, candidates: list[str]) -> tuple[str | None, str | No
         candidates,
         threshold=THRESHOLD,
         splink_threshold=SPLINK_THRESHOLD,
+        repo=repo,
+        website=website,
     )
     return merge_matching.prompt_user_for_match(name, suggestions, top_name, top_label)
 
@@ -347,6 +380,13 @@ def main():
     # list existing db companies (file stems)
     existing = [p.stem for p in db.glob("*.md")]
 
+    # Load existing KB companies into CompanyRepository for deterministic
+    # entity resolution (Phase 3). Falls back to splink when data-platform
+    # is not installed.
+    repo = _build_company_repo(db)
+    if repo is not None:
+        print("Loaded existing companies into entity resolution repository.")
+
     for comp_dir in sorted(src.iterdir()):
         if not comp_dir.is_dir():
             continue
@@ -357,12 +397,14 @@ def main():
         if not mdfiles:
             continue
 
-        # attempt to determine a canonical company name and schema class from metadata
+        # attempt to determine a canonical company name, schema class, and
+        # website URL from metadata (website is used for domain-based matching)
         company_name = None
         schema_class = None
+        website = None
         for f in mdfiles:
             text = f.read_text(encoding="utf-8")
-            # look for YAML company: and schema: fields on first 20 lines
+            # look for YAML company:, schema:, and website: fields on first 20 lines
             header = "\n".join(text.splitlines()[:20])
             if not company_name:
                 m = re.search(r"^company:\s*(.+)$", header, re.I | re.M)
@@ -372,14 +414,18 @@ def main():
                 m2 = re.search(r"^schema:\s*(.+)$", header, re.I | re.M)
                 if m2:
                     schema_class = m2.group(1).strip()
-            if company_name and schema_class:
+            if not website:
+                m3 = re.search(r"^website:\s*(.+)$", header, re.I | re.M)
+                if m3:
+                    website = m3.group(1).strip()
+            if company_name and schema_class and website:
                 break
         if not company_name:
             company_name = comp_dir.name
 
         print(f"\nProcessing company: {company_name} (from {comp_dir})")
 
-        match, custom_name = choose_match(company_name, existing)
+        match, custom_name = choose_match(company_name, existing, repo=repo, website=website)
         if match:
             # Use existing company
             target_file = db / f"{match}.md"

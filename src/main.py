@@ -6,10 +6,11 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable
 
 from .openai_agent import CompanyResearchPipeline
-from .config import resolve_storage_paths
+from .config import load_config, resolve_storage_paths
 from .store import (
     append_to_list_field,
     company_dirs,
@@ -32,6 +33,52 @@ _FIRM_TYPE_LINE_RE = re.compile(
     r"^\s*[-*]?\s*\*{0,2}\s*firm\s+type\s*\*{0,2}\s*:\s*(.+?)\s*$",
     re.IGNORECASE,
 )
+
+
+def _try_sanitize_research_output(
+    file_path: Path,
+    *,
+    api_key: str | None,
+    model: str,
+) -> None:
+    """Run LLM-based metadata sanitisation on a freshly written staging file.
+
+    Uses ``data_platform.actions.CompanySanitizer`` to normalise ``firm_type``
+    and ``focus`` against the attributes catalog, fill in a missing ``website``
+    field, and assign NAICS codes.
+
+    The sanitiser is pointed at the staging markdown directory so it operates
+    on the file written by the research pipeline before it is merged into the
+    KB.  This enriches the metadata carried into the merge step.
+
+    This is a best-effort enrichment step — any import or runtime failures are
+    caught and reported without aborting the rest of the research workflow.
+
+    Requires ``data-platform`` to be installed and
+    ``data_platform.sanitize_on_save: true`` in *config.yaml*.
+    """
+    try:
+        from data_platform.actions.llm_client import LLMClient  # noqa: PLC0415
+        from data_platform.actions.sanitize_company import CompanySanitizer  # noqa: PLC0415
+    except ImportError:
+        return
+
+    try:
+        llm = LLMClient(api_key=api_key or None, model=model)
+        # Point the reader at the staging company dir, treating the markdown
+        # sub-folder as the "companies" folder within a temporary KB root so
+        # CompanySanitizer's KnowledgeBaseReader can locate the file.
+        sanitizer = CompanySanitizer(
+            kb_root=file_path.parent.parent,
+            llm_client=llm,
+            companies_folder=file_path.parent.name,
+        )
+        result = sanitizer.sanitize_file(file_path)
+        if result.success and result.changes:
+            print(f"  Sanitized metadata fields: {sorted(result.changes)}")
+    except Exception as exc:  # noqa: BLE001
+        # Never let sanitisation errors abort the research flow.
+        print(f"  Sanitization skipped: {exc}")
 
 
 def _print_processed_companies(processed_companies: list[str]) -> None:
@@ -182,6 +229,9 @@ def _save_report(
     csv_firm_type: str | None = None,
     interactive: bool = True,
     source_dir: str | None = None,
+    sanitize: bool = False,
+    sanitize_api_key: str | None = None,
+    sanitize_model: str = "gpt-4o-mini",
 ) -> None:
     """Persist one company report and optionally prompt for interactive metadata updates."""
     website_from_body, firm_type_from_body, cleaned_report = _extract_ai_report_field_lines(result["report"])
@@ -205,6 +255,14 @@ def _save_report(
     slug = safe_slug(f"{company}-ai-research")
     path = write_markdown(dirs["md"], slug, cleaned_report, meta)
     print(f"Report saved to {path}")
+
+    # Optional: LLM-based metadata sanitisation via data-platform (Issue #18).
+    if sanitize:
+        _try_sanitize_research_output(
+            path,
+            api_key=sanitize_api_key,
+            model=sanitize_model,
+        )
 
     if not interactive:
         return
@@ -230,7 +288,14 @@ def _save_report(
             print(f"Updated metadata in {count} file(s).")
 
 
-def _run_interactive(pipeline: CompanyResearchPipeline, source_dir: str) -> list[str]:
+def _run_interactive(
+    pipeline: CompanyResearchPipeline,
+    source_dir: str,
+    *,
+    sanitize: bool = False,
+    sanitize_api_key: str | None = None,
+    sanitize_model: str = "gpt-4o-mini",
+) -> list[str]:
     """Run interactive single-company research loop."""
     print("\n=== AI Research Mode (Interactive) ===")
     print("This project now runs only on the OpenAI multi-agent research pipeline.\n")
@@ -264,7 +329,14 @@ def _run_interactive(pipeline: CompanyResearchPipeline, source_dir: str) -> list
 
         save = input("Save report to markdown file? (y/n): ").strip().lower()
         if _is_yes(save):
-            _save_report(company, result, source_dir=source_dir)
+            _save_report(
+                company,
+                result,
+                source_dir=source_dir,
+                sanitize=sanitize,
+                sanitize_api_key=sanitize_api_key,
+                sanitize_model=sanitize_model,
+            )
 
         processed_companies.append(company)
 
@@ -275,7 +347,14 @@ def _run_interactive(pipeline: CompanyResearchPipeline, source_dir: str) -> list
     return processed_companies
 
 
-def _run_batch(pipeline: CompanyResearchPipeline, source_dir: str) -> BatchRunResult:
+def _run_batch(
+    pipeline: CompanyResearchPipeline,
+    source_dir: str,
+    *,
+    sanitize: bool = False,
+    sanitize_api_key: str | None = None,
+    sanitize_model: str = "gpt-4o-mini",
+) -> BatchRunResult:
     """Run batch research using companies.csv rows."""
     print("\n=== AI Batch Research Mode (companies.csv) ===")
     print("This mode processes each company from companies.csv using the OpenAI pipeline.\n")
@@ -308,6 +387,9 @@ def _run_batch(pipeline: CompanyResearchPipeline, source_dir: str) -> BatchRunRe
                 csv_firm_type=csv_firm_type,
                 interactive=False,
                 source_dir=source_dir,
+                sanitize=sanitize,
+                sanitize_api_key=sanitize_api_key,
+                sanitize_model=sanitize_model,
             )
             print(f"  ✓ Website: {result['website']}")
             print(f"  ✓ Schema:  {result['schema']}")
@@ -333,11 +415,25 @@ def run() -> None:
     storage = resolve_storage_paths("config.yaml")
     source_dir = str(storage["source_dir"])
 
+    # Load data-platform sanitisation config (Phase 6).
+    cfg = load_config("config.yaml") if Path("config.yaml").exists() else {}
+    dp_cfg = cfg.get("data_platform") or {}
+    sanitize = bool(dp_cfg.get("sanitize_on_save", False))
+    oa_cfg = cfg.get("openai") or {}
+    sanitize_api_key = oa_cfg.get("api_key") or None
+    sanitize_model = str(oa_cfg.get("model", "gpt-4o-mini"))
+
     mode = input("Choose mode - (1) AI Interactive, (2) AI Batch from companies.csv: ").strip()
 
     if mode == "2":
         try:
-            rows, processed_rows, processed_companies, fieldnames = _run_batch(pipeline, source_dir)
+            rows, processed_rows, processed_companies, fieldnames = _run_batch(
+                pipeline,
+                source_dir,
+                sanitize=sanitize,
+                sanitize_api_key=sanitize_api_key,
+                sanitize_model=sanitize_model,
+            )
         except FileNotFoundError:
             print("companies.csv not found.")
             return
@@ -356,7 +452,13 @@ def run() -> None:
                 except (OSError, ValueError, RuntimeError) as exc:
                     print(f"Failed to update companies.csv: {exc}")
     else:
-        processed_companies = _run_interactive(pipeline, source_dir)
+        processed_companies = _run_interactive(
+            pipeline,
+            source_dir,
+            sanitize=sanitize,
+            sanitize_api_key=sanitize_api_key,
+            sanitize_model=sanitize_model,
+        )
         _print_processed_companies(processed_companies)
 
     resp = input("\nRun merge tool to add markdown files to DB now? (y/n): ").strip().lower()
@@ -366,3 +468,4 @@ def run() -> None:
 
 if __name__ == "__main__":
     run()
+

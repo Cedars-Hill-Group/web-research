@@ -9,3 +9,18 @@ storage:
   database_dir: "C:/Obsidian/Knowledge Base/Companies"
   # template_path: ""      # Optional: fallback template for new database files (used when
                            #   no schema-class-specific template exists under schemas_dir)
+
+# knowledge_base is derived automatically from storage.database_dir (the KB root is one
+# level up, and the companies sub-folder name is taken from the last path component).
+# Override here only when you need a different layout or when data-platform is configured
+# with an explicit knowledge_base.path.
+#
+# knowledge_base:
+#   path: "C:/Obsidian/Knowledge Base"   # KB root (parent of the companies folder)
+#   companies_dir: Companies             # sub-folder name (default: derived from database_dir)
+
+# data_platform controls optional integrations with the data-platform package.
+#
+# data_platform:
+#   sanitize_on_save: false  # Run LLM-based metadata normalisation after each report is saved
+#                            # (normalises firm_type/focus, fills website, assigns NAICS code)

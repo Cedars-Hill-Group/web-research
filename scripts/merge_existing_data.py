@@ -25,6 +25,7 @@ from scripts import merge_helpers  # noqa: E402
 from scripts.merge_markdown_db import (  # noqa: E402
     append_markdown_to_company,
     choose_match,
+    _build_company_repo,
     _resolve_template,
 )
 from src.config import load_config, resolve_storage_paths  # noqa: E402
@@ -98,6 +99,13 @@ def run_merge(
     db_dir.mkdir(parents=True, exist_ok=True)
     existing = [path.stem for path in db_dir.glob("*.md")]
 
+    # Load existing KB companies into CompanyRepository for deterministic
+    # entity resolution (Phase 3). Falls back to splink when data-platform
+    # is not installed.
+    repo = _build_company_repo(db_dir)
+    if repo is not None:
+        print("Loaded existing companies into entity resolution repository.")
+
     companies_seen = 0
     companies_merged = 0
     files_appended = 0
@@ -115,8 +123,17 @@ def run_merge(
         companies_seen += 1
         company_name = _extract_company_name(md_files, company_dir.name)
         schema_class = _extract_schema_class(md_files)
+
+        # Extract website for domain-based entity resolution.
+        website = None
+        for md_file in md_files:
+            meta = _load_front_matter_meta(md_file)
+            if meta.get("website"):
+                website = str(meta["website"])
+                break
+
         print(f"\nProcessing: {company_name}")
-        match, custom_name = choose_match(company_name, existing)
+        match, custom_name = choose_match(company_name, existing, repo=repo, website=website)
 
         if match:
             target_file = db_dir / f"{match}.md"

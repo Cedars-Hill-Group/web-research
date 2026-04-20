@@ -4,3 +4,5 @@ PyYAML==6.0.2
 requests==2.32.4
 openai>=1.59.0
 splink>=4.0.0
+python-frontmatter>=1.1
+data-platform @ git+https://github.com/Cedars-Hill-Group/data-platform.git@main

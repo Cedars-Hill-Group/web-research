@@ -11,7 +11,7 @@ def test_run_merge_deletes_processed_company_dir_when_all_duplicates(tmp_path, m
     db_dir = tmp_path / "db"
     db_dir.mkdir()
 
-    monkeypatch.setattr(merge_existing_data, "choose_match", lambda name, existing: (None, "Acme"))
+    monkeypatch.setattr(merge_existing_data, "choose_match", lambda name, existing, **kwargs: (None, "Acme"))
     monkeypatch.setattr(merge_existing_data, "append_markdown_to_company", lambda *args, **kwargs: False)
 
     code = merge_existing_data.run_merge(source_dir=source_dir, db_dir=db_dir, keep_merged_source=False)
@@ -30,7 +30,7 @@ def test_run_merge_respects_keep_merged_source_flag(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir()
 
-    monkeypatch.setattr(merge_existing_data, "choose_match", lambda name, existing: (None, "Acme"))
+    monkeypatch.setattr(merge_existing_data, "choose_match", lambda name, existing, **kwargs: (None, "Acme"))
     monkeypatch.setattr(merge_existing_data, "append_markdown_to_company", lambda *args, **kwargs: False)
 
     code = merge_existing_data.run_merge(source_dir=source_dir, db_dir=db_dir, keep_merged_source=True)
