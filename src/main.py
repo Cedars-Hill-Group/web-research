@@ -35,6 +35,60 @@ _FIRM_TYPE_LINE_RE = re.compile(
 )
 
 
+def _llm_normalize_catalog_properties(
+    file_path: Path,
+    *,
+    api_key: str | None,
+    model: str,
+) -> None:
+    """Normalize ``focus`` and ``firm_type`` via the CompanySanitizer LLM workflow.
+
+    Uses the same LLM classification prompts as
+    :class:`~data_platform.actions.sanitize_company.CompanySanitizer` to select
+    catalog-normalized values for the ``focus`` and ``firm_type`` metadata fields,
+    then writes the results back to *file_path*.
+
+    The attributes catalog is filtered to only these two properties so that
+    no additional LLM calls are made for website identification or NAICS
+    classification (those remain controlled by the ``sanitize_on_save`` config
+    flag if desired).
+
+    Fails silently when ``data-platform`` is not installed or the LLM call
+    fails — the file is left with its existing AI-inferred values.
+    """
+    try:
+        from data_platform.actions.llm_client import LLMClient  # noqa: PLC0415
+        from data_platform.actions.sanitize_company import CompanySanitizer  # noqa: PLC0415
+        from data_platform.ontology_adapter import AttributesCatalog, get_attributes_catalog  # noqa: PLC0415
+    except ImportError:
+        return
+
+    try:
+        full_catalog = get_attributes_catalog()
+        target_fields = {"focus", "firm_type"}
+        filtered_catalog = AttributesCatalog(
+            properties=[p for p in full_catalog.properties if p.field in target_fields]
+        )
+        if not filtered_catalog.properties:
+            return
+
+        llm = LLMClient(api_key=api_key or None, model=model)
+        sanitizer = CompanySanitizer(
+            kb_root=file_path.parent.parent,
+            llm_client=llm,
+            attributes_catalog=filtered_catalog,
+            companies_folder=file_path.parent.name,
+        )
+        doc = sanitizer._reader.read_file(file_path)
+        changes = sanitizer._normalize_properties(doc)
+        if changes:
+            CompanySanitizer._write_metadata(file_path, {**doc.metadata, **changes})
+            print(f"  LLM-normalized metadata fields: {sorted(changes)}")
+    except Exception as exc:  # noqa: BLE001
+        # Never let normalization errors abort the research flow.
+        print(f"  LLM metadata normalization skipped: {exc}")
+
+
 def _try_sanitize_research_output(
     file_path: Path,
     *,
@@ -142,23 +196,18 @@ def _extract_ai_report_field_lines(report: str) -> tuple[str | None, str | None,
 
 
 def _prompt_missing_ai_metadata(captured: dict[str, str | None]) -> dict[str, str | None]:
-    """Prompt for optional metadata fields that are still missing."""
+    """Prompt for the remaining metadata fields that require user input.
+
+    ``focus`` and ``firm_type`` are no longer prompted here — they are
+    determined automatically by the LLM catalog-normalization workflow in
+    :func:`_llm_normalize_catalog_properties`.  This function handles only
+    the fields that have no automated source:
+
+    * ``source`` — where the company lead came from (always asked).
+    * ``prop_type`` — property type(s) for CRE-focused companies.
+    * ``loan_type`` — loan type(s) for lending-focused companies.
+    """
     resolved = dict(captured)
-
-    if not resolved.get("focus"):
-        resolved["focus"] = input("Enter focus for this company (leave blank to skip): ").strip() or None
-
-    # For firm_type: show AI-inferred value (if any) and let user confirm, edit, or add values.
-    ai_firm_type = resolved.get("firm_type")
-    if ai_firm_type:
-        user_input = input(
-            f"Firm type (AI inferred: {ai_firm_type!r}) - press Enter to keep, or enter new/additional values"
-            " (comma-separated): "
-        ).strip()
-        if user_input:
-            resolved["firm_type"] = user_input
-    else:
-        resolved["firm_type"] = input("Enter firm type for this company (leave blank to skip): ").strip() or None
 
     # Source must always be provided by the user; never use a hardcoded default.
     resolved["source"] = input("Enter source for this company (leave blank to skip): ").strip() or None
@@ -256,9 +305,18 @@ def _save_report(
     path = write_markdown(dirs["md"], slug, cleaned_report, meta)
     print(f"Report saved to {path}")
 
-    # Optional: LLM-based metadata sanitisation via data-platform (Issue #18).
+    # Normalize focus and firm_type against the attributes catalog via LLM.
+    # When full sanitization is enabled (sanitize_on_save), it already runs
+    # _normalize_properties as part of a broader enrichment pass, so we skip
+    # the focused call to avoid duplicate LLM requests for the same fields.
     if sanitize:
         _try_sanitize_research_output(
+            path,
+            api_key=sanitize_api_key,
+            model=sanitize_model,
+        )
+    else:
+        _llm_normalize_catalog_properties(
             path,
             api_key=sanitize_api_key,
             model=sanitize_model,
@@ -268,8 +326,6 @@ def _save_report(
         return
 
     captured = {
-        "focus": focus_from_agent,
-        "firm_type": merged_firm_type,
         "source": None,
         "prop_type": None,
         "loan_type": None,
@@ -277,7 +333,7 @@ def _save_report(
     resolved = _prompt_missing_ai_metadata(captured)
 
     updates: dict[str, str] = {}
-    for key in ("focus", "firm_type", "source", "prop_type", "loan_type"):
+    for key in ("source", "prop_type", "loan_type"):
         value = resolved.get(key)
         if value:
             updates[key] = value
