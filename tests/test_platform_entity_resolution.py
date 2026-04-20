@@ -64,16 +64,11 @@ class TestResolveWithCompanyRepo:
         assert "name match" in label
 
     def test_returns_none_when_import_error(self):
-        import sys
-        original = sys.modules.get("data_platform.ontology_adapter")
-        sys.modules["data_platform.ontology_adapter"] = None  # type: ignore[assignment]
-        try:
+        with patch.dict(
+            "sys.modules",
+            {"data_platform.ontology_adapter": None},  # type: ignore[dict-item]
+        ):
             stem, label = merge_matching.resolve_with_company_repo("Acme", None, MagicMock())
-        finally:
-            if original is None:
-                del sys.modules["data_platform.ontology_adapter"]
-            else:
-                sys.modules["data_platform.ontology_adapter"] = original
         assert stem is None
         assert label == ""
 

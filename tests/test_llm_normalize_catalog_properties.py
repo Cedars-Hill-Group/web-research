@@ -302,3 +302,28 @@ def test_llm_normalize_catalog_properties_noop_when_catalog_has_no_matching_fiel
 
     # CompanySanitizer should never be instantiated if the filtered catalog is empty.
     mocks["sanitizer_cls"].assert_not_called()
+
+
+def test_llm_normalize_catalog_properties_does_not_swallow_keyboard_interrupt(tmp_path):
+    """KeyboardInterrupt must propagate — ``except Exception`` does not catch BaseException."""
+    md_file = _write_stub_file(tmp_path)
+    mocks = _build_mock_imports()
+    mocks["sanitizer_instance"]._normalize_properties.side_effect = KeyboardInterrupt
+
+    mock_llm_module = MagicMock()
+    mock_llm_module.LLMClient = mocks["llm_cls"]
+
+    mock_sanitize_module = MagicMock()
+    mock_sanitize_module.CompanySanitizer = mocks["sanitizer_cls"]
+
+    mock_ontology_module = MagicMock()
+    mock_ontology_module.AttributesCatalog = mocks["attrs_catalog_cls"]
+    mock_ontology_module.get_attributes_catalog = mocks["get_attrs_catalog"]
+
+    with patch.dict(sys.modules, {
+        "data_platform.actions.llm_client": mock_llm_module,
+        "data_platform.actions.sanitize_company": mock_sanitize_module,
+        "data_platform.ontology_adapter": mock_ontology_module,
+    }):
+        with pytest.raises(KeyboardInterrupt):
+            _llm_normalize_catalog_properties(md_file, api_key="sk-test", model="gpt-4o-mini")
