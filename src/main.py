@@ -41,17 +41,18 @@ def _llm_normalize_catalog_properties(
     api_key: str | None,
     model: str,
 ) -> None:
-    """Normalize ``focus`` and ``firm_type`` via the CompanySanitizer LLM workflow.
+    """Normalize ``focus``, ``firm_type``, and NAICS fields via the CompanySanitizer LLM workflow.
 
     Uses the same LLM classification prompts as
-    :class:`~data_platform.actions.sanitize_company.CompanySanitizer` to select
-    catalog-normalized values for the ``focus`` and ``firm_type`` metadata fields,
-    then writes the results back to *file_path*.
+    :class:`~data_platform.actions.sanitize_company.CompanySanitizer` to:
 
-    The attributes catalog is filtered to only these two properties so that
-    no additional LLM calls are made for website identification or NAICS
-    classification (those remain controlled by the ``sanitize_on_save`` config
-    flag if desired).
+    1. Select catalog-normalized values for the ``focus`` and ``firm_type``
+       metadata fields (attributes catalog filtered to those two properties).
+    2. Assign NAICS sector/industry codes (``naics_code``, ``naics_title``,
+       ``naics_sector_code``, ``naics_sector_title``) via a separate LLM call.
+
+    Results are written back to *file_path*.  Website identification is still
+    left to the ``sanitize_on_save`` pass to avoid duplicate LLM calls.
 
     Fails silently when ``data-platform`` is not installed or the LLM call
     fails — the file is left with its existing AI-inferred values.
@@ -81,6 +82,7 @@ def _llm_normalize_catalog_properties(
         )
         doc = sanitizer._reader.read_file(file_path)
         changes = sanitizer._normalize_properties(doc)
+        changes.update(sanitizer._classify_naics(doc))
         if changes:
             CompanySanitizer._write_metadata(file_path, {**doc.metadata, **changes})
             print(f"  LLM-normalized metadata fields: {sorted(changes)}")

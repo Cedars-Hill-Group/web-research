@@ -112,6 +112,7 @@ def _build_mock_imports():
         "firm_type": "real_estate",
         "focus": ["real_estate"],
     }
+    mock_sanitizer_instance._classify_naics.return_value = {}
 
     mock_sanitizer_cls = MagicMock(return_value=mock_sanitizer_instance)
     mock_sanitizer_cls._write_metadata = MagicMock()
@@ -302,6 +303,41 @@ def test_llm_normalize_catalog_properties_noop_when_catalog_has_no_matching_fiel
 
     # CompanySanitizer should never be instantiated if the filtered catalog is empty.
     mocks["sanitizer_cls"].assert_not_called()
+
+
+def test_llm_normalize_catalog_properties_calls_classify_naics(tmp_path):
+    """_classify_naics must be called and its changes written to the file."""
+    md_file = _write_stub_file(tmp_path)
+    mocks = _build_mock_imports()
+    mocks["sanitizer_instance"]._classify_naics.return_value = {
+        "naics_code": "5239",
+        "naics_title": "Other Financial Investment Activities",
+        "naics_sector_code": "52",
+        "naics_sector_title": "Finance and Insurance",
+    }
+
+    mock_llm_module = MagicMock()
+    mock_llm_module.LLMClient = mocks["llm_cls"]
+
+    mock_sanitize_module = MagicMock()
+    mock_sanitize_module.CompanySanitizer = mocks["sanitizer_cls"]
+
+    mock_ontology_module = MagicMock()
+    mock_ontology_module.AttributesCatalog = mocks["attrs_catalog_cls"]
+    mock_ontology_module.get_attributes_catalog = mocks["get_attrs_catalog"]
+
+    with patch.dict(sys.modules, {
+        "data_platform.actions.llm_client": mock_llm_module,
+        "data_platform.actions.sanitize_company": mock_sanitize_module,
+        "data_platform.ontology_adapter": mock_ontology_module,
+    }):
+        _llm_normalize_catalog_properties(md_file, api_key="sk-test", model="gpt-4o-mini")
+
+    mocks["sanitizer_instance"]._classify_naics.assert_called_once()
+
+    _, written_meta = mocks["sanitizer_cls"]._write_metadata.call_args[0]
+    assert written_meta["naics_code"] == "5239"
+    assert written_meta["naics_sector_code"] == "52"
 
 
 def test_llm_normalize_catalog_properties_does_not_swallow_keyboard_interrupt(tmp_path):
