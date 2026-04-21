@@ -123,12 +123,17 @@ def _build_mock_imports():
     # --- get_attributes_catalog stub ---
     mock_get_catalog = MagicMock(return_value=mock_catalog)
 
+    # --- get_catalog (raw dict, for applies_when) stub ---
+    # By default, return a raw catalog with no applies_when so all fields pass.
+    mock_get_raw_catalog = MagicMock(return_value={"properties": []})
+
     return {
         "llm_cls": mock_llm_cls,
         "sanitizer_cls": mock_sanitizer_cls,
         "sanitizer_instance": mock_sanitizer_instance,
         "attrs_catalog_cls": mock_attrs_catalog_cls,
         "get_attrs_catalog": mock_get_catalog,
+        "get_raw_catalog": mock_get_raw_catalog,
         "mock_doc": mock_doc,
         "mock_catalog": mock_catalog,
     }
@@ -363,3 +368,200 @@ def test_llm_normalize_catalog_properties_does_not_swallow_keyboard_interrupt(tm
     }):
         with pytest.raises(KeyboardInterrupt):
             _llm_normalize_catalog_properties(md_file, api_key="sk-test", model="gpt-4o-mini")
+
+
+# ---------------------------------------------------------------------------
+# applies_when: loan_type / loan_structure conditional behavior
+# ---------------------------------------------------------------------------
+
+
+def _loan_stub_md(focus: str | list[str]) -> str:
+    """Build a stub front-matter with the given focus value(s)."""
+    if isinstance(focus, list):
+        focus_yaml = "[" + ", ".join(f'"{f}"' for f in focus) + "]"
+    else:
+        focus_yaml = f'"{focus}"'
+    return f"""\
+---
+company: Acme Lending
+website: https://acmelending.com/
+focus: {focus_yaml}
+---
+
+Acme Lending provides commercial real estate debt financing.
+"""
+
+
+def _write_loan_stub_file(tmp_path: Path, focus: str | list[str]) -> Path:
+    md_dir = tmp_path / "acme-lending" / "markdown"
+    md_dir.mkdir(parents=True)
+    md_file = md_dir / "acme-ai-research.md"
+    md_file.write_text(_loan_stub_md(focus), encoding="utf-8")
+    return md_file
+
+
+def _build_loan_mocks(*, include_loan_type_in_changes: bool = True):
+    """Return mocks that include a loan_type property with an applies_when condition."""
+    mocks = _build_mock_imports()
+
+    # Add loan_type property to the catalog
+    loan_type_prop = MagicMock()
+    loan_type_prop.field = "loan_type"
+    mocks["mock_catalog"].properties = [*mocks["mock_catalog"].properties, loan_type_prop]
+
+    # LLM returns loan_type as a change
+    base_changes = {"firm_type": "real_estate", "focus": ["commercial_real_estate"]}
+    if include_loan_type_in_changes:
+        base_changes["loan_type"] = ["bridge", "construction"]
+    mocks["sanitizer_instance"]._normalize_properties.return_value = base_changes
+
+    # The raw catalog declares that loan_type applies only when focus contains CRE
+    raw_catalog_with_condition = {
+        "properties": [
+            {"field": "firm_type"},
+            {"field": "focus"},
+            {
+                "field": "loan_type",
+                "applies_when": {"focus": {"contains_any": ["commercial_real_estate"]}},
+            },
+        ]
+    }
+    mocks["get_raw_catalog"].return_value = raw_catalog_with_condition
+    return mocks
+
+
+def test_loan_type_written_when_focus_is_cre(tmp_path):
+    """When focus contains 'commercial_real_estate', loan_type changes must be written."""
+    md_file = _write_loan_stub_file(tmp_path, focus=["commercial_real_estate"])
+    mocks = _build_loan_mocks()
+
+    # doc.metadata must reflect the CRE focus so the applies_when condition passes
+    mocks["mock_doc"].metadata = {
+        "company": "Acme Lending",
+        "website": "https://acmelending.com/",
+        "focus": ["commercial_real_estate"],
+    }
+
+    mock_llm_module = MagicMock()
+    mock_llm_module.LLMClient = mocks["llm_cls"]
+
+    mock_sanitize_module = MagicMock()
+    mock_sanitize_module.CompanySanitizer = mocks["sanitizer_cls"]
+
+    mock_ontology_module = MagicMock()
+    mock_ontology_module.AttributesCatalog = mocks["attrs_catalog_cls"]
+    mock_ontology_module.get_attributes_catalog = mocks["get_attrs_catalog"]
+    mock_ontology_module.get_catalog = mocks["get_raw_catalog"]
+
+    with patch.dict(sys.modules, {
+        "data_platform.actions.llm_client": mock_llm_module,
+        "data_platform.actions.sanitize_company": mock_sanitize_module,
+        "data_platform.ontology_adapter": mock_ontology_module,
+    }):
+        _llm_normalize_catalog_properties(md_file, api_key="sk-test", model="gpt-4o-mini")
+
+    mocks["sanitizer_cls"]._write_metadata.assert_called_once()
+    _, written_meta = mocks["sanitizer_cls"]._write_metadata.call_args[0]
+    assert written_meta["loan_type"] == ["bridge", "construction"]
+
+
+def test_loan_type_excluded_when_focus_is_not_cre(tmp_path):
+    """When focus does not include 'commercial_real_estate', loan_type must not be written."""
+    md_file = _write_loan_stub_file(tmp_path, focus=["technology", "healthcare"])
+    mocks = _build_loan_mocks()
+
+    # doc.metadata has a non-CRE focus
+    mocks["mock_doc"].metadata = {
+        "company": "Acme Tech",
+        "website": "https://acmetech.com/",
+        "focus": ["technology", "healthcare"],
+    }
+
+    mock_llm_module = MagicMock()
+    mock_llm_module.LLMClient = mocks["llm_cls"]
+
+    mock_sanitize_module = MagicMock()
+    mock_sanitize_module.CompanySanitizer = mocks["sanitizer_cls"]
+
+    mock_ontology_module = MagicMock()
+    mock_ontology_module.AttributesCatalog = mocks["attrs_catalog_cls"]
+    mock_ontology_module.get_attributes_catalog = mocks["get_attrs_catalog"]
+    mock_ontology_module.get_catalog = mocks["get_raw_catalog"]
+
+    with patch.dict(sys.modules, {
+        "data_platform.actions.llm_client": mock_llm_module,
+        "data_platform.actions.sanitize_company": mock_sanitize_module,
+        "data_platform.ontology_adapter": mock_ontology_module,
+    }):
+        _llm_normalize_catalog_properties(md_file, api_key="sk-test", model="gpt-4o-mini")
+
+    # loan_type must NOT appear in the written metadata
+    mocks["sanitizer_cls"]._write_metadata.assert_called_once()
+    _, written_meta = mocks["sanitizer_cls"]._write_metadata.call_args[0]
+    assert "loan_type" not in written_meta
+
+
+def test_loan_type_included_when_applies_when_map_empty(tmp_path):
+    """When the raw catalog has no applies_when entries, all LLM changes are kept."""
+    md_file = _write_loan_stub_file(tmp_path, focus=["technology"])
+    mocks = _build_loan_mocks()
+
+    mocks["mock_doc"].metadata = {
+        "company": "Acme Tech",
+        "focus": ["technology"],
+    }
+
+    # Raw catalog returns no applies_when conditions
+    mocks["get_raw_catalog"].return_value = {"properties": []}
+
+    mock_llm_module = MagicMock()
+    mock_llm_module.LLMClient = mocks["llm_cls"]
+
+    mock_sanitize_module = MagicMock()
+    mock_sanitize_module.CompanySanitizer = mocks["sanitizer_cls"]
+
+    mock_ontology_module = MagicMock()
+    mock_ontology_module.AttributesCatalog = mocks["attrs_catalog_cls"]
+    mock_ontology_module.get_attributes_catalog = mocks["get_attrs_catalog"]
+    mock_ontology_module.get_catalog = mocks["get_raw_catalog"]
+
+    with patch.dict(sys.modules, {
+        "data_platform.actions.llm_client": mock_llm_module,
+        "data_platform.actions.sanitize_company": mock_sanitize_module,
+        "data_platform.ontology_adapter": mock_ontology_module,
+    }):
+        _llm_normalize_catalog_properties(md_file, api_key="sk-test", model="gpt-4o-mini")
+
+    # Without applies_when restrictions, loan_type from _normalize_properties is kept
+    _, written_meta = mocks["sanitizer_cls"]._write_metadata.call_args[0]
+    assert written_meta["loan_type"] == ["bridge", "construction"]
+
+
+def test_loan_type_still_written_when_get_catalog_raises(tmp_path):
+    """If get_catalog raises, applies_when_map stays empty and no changes are filtered out."""
+    md_file = _write_loan_stub_file(tmp_path, focus=["technology"])
+    mocks = _build_loan_mocks()
+
+    mocks["mock_doc"].metadata = {"company": "Acme Tech", "focus": ["technology"]}
+
+    mock_llm_module = MagicMock()
+    mock_llm_module.LLMClient = mocks["llm_cls"]
+
+    mock_sanitize_module = MagicMock()
+    mock_sanitize_module.CompanySanitizer = mocks["sanitizer_cls"]
+
+    mock_ontology_module = MagicMock()
+    mock_ontology_module.AttributesCatalog = mocks["attrs_catalog_cls"]
+    mock_ontology_module.get_attributes_catalog = mocks["get_attrs_catalog"]
+    mock_ontology_module.get_catalog.side_effect = RuntimeError("catalog unavailable")
+
+    with patch.dict(sys.modules, {
+        "data_platform.actions.llm_client": mock_llm_module,
+        "data_platform.actions.sanitize_company": mock_sanitize_module,
+        "data_platform.ontology_adapter": mock_ontology_module,
+    }):
+        _llm_normalize_catalog_properties(md_file, api_key="sk-test", model="gpt-4o-mini")
+
+    # get_catalog failure must be swallowed; the LLM changes are still written
+    _, written_meta = mocks["sanitizer_cls"]._write_metadata.call_args[0]
+    assert written_meta["loan_type"] == ["bridge", "construction"]

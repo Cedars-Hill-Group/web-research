@@ -35,21 +35,66 @@ _FIRM_TYPE_LINE_RE = re.compile(
 )
 
 
+def _check_applies_when(
+    applies_when: dict[str, Any] | None,
+    doc_metadata: dict[str, Any],
+) -> bool:
+    """Return True when *applies_when* conditions are satisfied by *doc_metadata*.
+
+    Each key in *applies_when* is a metadata field name; the value is a
+    condition dict.  The only supported operator today is ``contains_any``,
+    which passes when the document field (treated as a list) contains at least
+    one of the listed values.  An absent or empty *applies_when* is treated as
+    "always applies".
+
+    This convention is designed to be stored in the ontology-core attributes
+    catalog alongside each
+    :class:`~data_platform.ontology_adapter.CatalogProperty` so that branching
+    logic is declarative and data-driven rather than hard-coded in consuming
+    applications.  For example, to restrict ``loan_type`` to companies whose
+    ``focus`` includes ``"commercial_real_estate"``::
+
+        {
+          "field": "loan_type",
+          "applies_when": {"focus": {"contains_any": ["commercial_real_estate"]}}
+        }
+
+    Adding a new conditional property therefore requires only a catalog change
+    in ``ontology-core`` — no code change is needed here.
+    """
+    if not applies_when:
+        return True
+    for field, condition in applies_when.items():
+        meta_value = doc_metadata.get(field, [])
+        if isinstance(meta_value, str):
+            meta_value = [meta_value]
+        if "contains_any" in condition:
+            if not any(v in meta_value for v in condition["contains_any"]):
+                return False
+    return True
+
+
 def _llm_normalize_catalog_properties(
     file_path: Path,
     *,
     api_key: str | None,
     model: str,
 ) -> None:
-    """Normalize ``focus``, ``firm_type``, and NAICS fields via the CompanySanitizer LLM workflow.
+    """Normalize catalog properties and NAICS fields via the CompanySanitizer LLM workflow.
 
     Uses the same LLM classification prompts as
     :class:`~data_platform.actions.sanitize_company.CompanySanitizer` to:
 
-    1. Select catalog-normalized values for the ``focus`` and ``firm_type``
-       metadata fields (attributes catalog filtered to those two properties).
+    1. Select catalog-normalized values for ``focus``, ``firm_type``,
+       ``loan_structure``, and ``loan_type`` metadata fields.  ``loan_structure``
+       and ``loan_type`` are only written when the company's ``focus`` satisfies
+       the ``applies_when`` condition stored in the ontology-core catalog (e.g.
+       ``focus`` must contain ``"commercial_real_estate"``).
     2. Assign NAICS sector/industry codes (``naics_code``, ``naics_title``,
        ``naics_sector_code``, ``naics_sector_title``) via a separate LLM call.
+
+    The ``applies_when`` conditions are read from the raw ontology-core catalog
+    at runtime so that branching rules remain in the catalog — not in this code.
 
     Results are written back to *file_path*.  Website identification is still
     left to the ``sanitize_on_save`` pass to avoid duplicate LLM calls.
@@ -60,13 +105,29 @@ def _llm_normalize_catalog_properties(
     try:
         from data_platform.actions.llm_client import LLMClient  # noqa: PLC0415
         from data_platform.actions.sanitize_company import CompanySanitizer  # noqa: PLC0415
-        from data_platform.ontology_adapter import AttributesCatalog, get_attributes_catalog  # noqa: PLC0415
+        from data_platform.ontology_adapter import (  # noqa: PLC0415
+            AttributesCatalog,
+            get_attributes_catalog,
+            get_catalog,
+        )
     except ImportError:
         return
 
     try:
+        # Fetch applies_when conditions from the raw ontology catalog.
+        # These declarative rules drive which properties are written for a
+        # given company without hardcoding focus values in this module.
+        applies_when_map: dict[str, dict[str, Any] | None] = {}
+        try:
+            raw = get_catalog("attributes")
+            for raw_prop in raw.get("properties") or []:
+                if isinstance(raw_prop, dict) and "field" in raw_prop:
+                    applies_when_map[raw_prop["field"]] = raw_prop.get("applies_when")
+        except Exception:  # noqa: BLE001
+            pass
+
         full_catalog = get_attributes_catalog()
-        target_fields = {"focus", "firm_type"}
+        target_fields = {"focus", "firm_type", "loan_structure", "loan_type"}
         filtered_catalog = AttributesCatalog(
             properties=[p for p in full_catalog.properties if p.field in target_fields]
         )
@@ -83,6 +144,13 @@ def _llm_normalize_catalog_properties(
         doc = sanitizer._reader.read_file(file_path)
         changes = sanitizer._normalize_properties(doc)
         changes.update(sanitizer._classify_naics(doc))
+        # Drop fields whose applies_when conditions are not met by this document.
+        # Fields with no applies_when entry in the catalog are always kept.
+        changes = {
+            field: value
+            for field, value in changes.items()
+            if _check_applies_when(applies_when_map.get(field), doc.metadata)
+        }
         if changes:
             CompanySanitizer._write_metadata(file_path, {**doc.metadata, **changes})
             print(f"  LLM-normalized metadata fields: {sorted(changes)}")
@@ -200,14 +268,13 @@ def _extract_ai_report_field_lines(report: str) -> tuple[str | None, str | None,
 def _prompt_missing_ai_metadata(captured: dict[str, str | None]) -> dict[str, str | None]:
     """Prompt for the remaining metadata fields that require user input.
 
-    ``focus`` and ``firm_type`` are no longer prompted here — they are
-    determined automatically by the LLM catalog-normalization workflow in
-    :func:`_llm_normalize_catalog_properties`.  This function handles only
-    the fields that have no automated source:
+    ``focus``, ``firm_type``, ``loan_type``, and ``loan_structure`` are no
+    longer prompted here — they are determined automatically by the LLM
+    catalog-normalization workflow in :func:`_llm_normalize_catalog_properties`.
+    This function handles only the fields that have no automated source:
 
     * ``source`` — where the company lead came from (always asked).
     * ``prop_type`` — property type(s) for CRE-focused companies.
-    * ``loan_type`` — loan type(s) for lending-focused companies.
     """
     resolved = dict(captured)
 
@@ -217,10 +284,6 @@ def _prompt_missing_ai_metadata(captured: dict[str, str | None]) -> dict[str, st
     if not resolved.get("prop_type"):
         resolved["prop_type"] = input(
             "Enter property type for this company (comma-separated for multiple, leave blank to skip): "
-        ).strip() or None
-    if not resolved.get("loan_type"):
-        resolved["loan_type"] = input(
-            "Enter loan type for this company (comma-separated for multiple, leave blank to skip): "
         ).strip() or None
 
     return resolved
@@ -330,12 +393,11 @@ def _save_report(
     captured = {
         "source": None,
         "prop_type": None,
-        "loan_type": None,
     }
     resolved = _prompt_missing_ai_metadata(captured)
 
     updates: dict[str, str] = {}
-    for key in ("source", "prop_type", "loan_type"):
+    for key in ("source", "prop_type"):
         value = resolved.get(key)
         if value:
             updates[key] = value
