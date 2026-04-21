@@ -115,24 +115,27 @@ def _llm_normalize_catalog_properties(
 
     try:
         # Fetch applies_when conditions from the raw ontology catalog.
+        # The catalog uses a flat dict structure, with an optional top-level
+        # "applies_when" key that maps field names to their conditions.
         # These declarative rules drive which properties are written for a
         # given company without hardcoding focus values in this module.
         applies_when_map: dict[str, dict[str, Any] | None] = {}
         try:
             raw = get_catalog("attributes")
-            for raw_prop in raw.get("properties") or []:
-                if isinstance(raw_prop, dict) and "field" in raw_prop:
-                    applies_when_map[raw_prop["field"]] = raw_prop.get("applies_when")
+            raw_applies_when = raw.get("applies_when") or {}
+            if isinstance(raw_applies_when, dict):
+                for field, condition in raw_applies_when.items():
+                    applies_when_map[field] = condition
         except Exception:  # noqa: BLE001
             pass
 
         full_catalog = get_attributes_catalog()
-        # These four fields are handled by this LLM normalization step.
-        # focus/firm_type are always classified; loan_structure/loan_type are
-        # conditionally included per their applies_when rules in the catalog
+        # These fields are handled by this LLM normalization step.
+        # focus/firm_type are always classified; loan_structure is
+        # conditionally included per its applies_when rule in the catalog
         # (typically restricted to companies whose focus contains CRE values).
         # Website identification and NAICS classification are handled separately.
-        target_fields = {"focus", "firm_type", "loan_structure", "loan_type"}
+        target_fields = {"focus", "firm_type", "loan_structure"}
         filtered_catalog = AttributesCatalog(
             properties=[p for p in full_catalog.properties if p.field in target_fields]
         )

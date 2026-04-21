@@ -172,15 +172,13 @@ def test_llm_normalize_catalog_properties_writes_normalized_fields(tmp_path):
 
 
 def test_llm_normalize_catalog_properties_filters_catalog_to_target_fields(tmp_path):
-    """Only target fields (focus, firm_type, loan_structure, loan_type) pass through; others are dropped."""
+    """Only target fields (focus, firm_type, loan_structure) pass through; others are dropped."""
     md_file = _write_stub_file(tmp_path)
     mocks = _build_mock_imports()
 
-    # Build a catalog that contains all four target fields plus two that must be filtered out.
+    # Build a catalog that contains all three target fields plus two that must be filtered out.
     loan_structure_prop = MagicMock()
     loan_structure_prop.field = "loan_structure"
-    loan_type_prop = MagicMock()
-    loan_type_prop.field = "loan_type"
     naics_prop = MagicMock()
     naics_prop.field = "naics_code"
     website_prop = MagicMock()
@@ -188,7 +186,6 @@ def test_llm_normalize_catalog_properties_filters_catalog_to_target_fields(tmp_p
     mocks["mock_catalog"].properties = [
         *mocks["mock_catalog"].properties,  # firm_type, focus
         loan_structure_prop,
-        loan_type_prop,
         naics_prop,
         website_prop,
     ]
@@ -221,7 +218,7 @@ def test_llm_normalize_catalog_properties_filters_catalog_to_target_fields(tmp_p
 
     assert filtered_catalog_arg is not None
     field_names = {p.field for p in filtered_catalog_arg}
-    assert field_names == {"focus", "firm_type", "loan_structure", "loan_type"}, (
+    assert field_names == {"focus", "firm_type", "loan_structure"}, (
         f"Unexpected filtered field set: {field_names!r}"
     )
     assert "naics_code" not in field_names
@@ -381,7 +378,7 @@ def test_llm_normalize_catalog_properties_does_not_swallow_keyboard_interrupt(tm
 
 
 # ---------------------------------------------------------------------------
-# applies_when: loan_type / loan_structure conditional behavior
+# applies_when: loan_structure conditional behavior
 # ---------------------------------------------------------------------------
 
 
@@ -410,38 +407,45 @@ def _write_loan_stub_file(tmp_path: Path, focus: str | list[str]) -> Path:
     return md_file
 
 
-def _build_loan_mocks(*, include_loan_type_in_changes: bool = True):
-    """Return mocks that include a loan_type property with an applies_when condition."""
+def _build_loan_mocks(*, include_loan_structure_in_changes: bool = True):
+    """Return mocks that include a loan_structure property with an applies_when condition.
+
+    The raw catalog uses the actual flat dict structure from ontology-core, with a
+    top-level ``"applies_when"`` key mapping field names to their conditions.
+    """
     mocks = _build_mock_imports()
 
-    # Add loan_type property to the catalog
-    loan_type_prop = MagicMock()
-    loan_type_prop.field = "loan_type"
-    mocks["mock_catalog"].properties = [*mocks["mock_catalog"].properties, loan_type_prop]
+    # Add loan_structure property to the catalog (mirrors the real catalog)
+    loan_structure_prop = MagicMock()
+    loan_structure_prop.field = "loan_structure"
+    mocks["mock_catalog"].properties = [*mocks["mock_catalog"].properties, loan_structure_prop]
 
-    # LLM returns loan_type as a change
+    # LLM returns loan_structure as a change
     base_changes = {"firm_type": "real_estate", "focus": ["commercial_real_estate"]}
-    if include_loan_type_in_changes:
-        base_changes["loan_type"] = ["bridge", "construction"]
+    if include_loan_structure_in_changes:
+        base_changes["loan_structure"] = ["senior", "mezz"]
     mocks["sanitizer_instance"]._normalize_properties.return_value = base_changes
 
-    # The raw catalog declares that loan_type applies only when focus contains CRE
+    # The raw catalog uses the FLAT dict format with a top-level "applies_when" key.
+    # This mirrors the actual attributes.json structure in ontology-core, where each
+    # field's condition is keyed by field name under "applies_when".
     raw_catalog_with_condition = {
-        "properties": [
-            {"field": "firm_type"},
-            {"field": "focus"},
-            {
-                "field": "loan_type",
-                "applies_when": {"focus": {"contains_any": ["commercial_real_estate"]}},
-            },
-        ]
+        "$ontology_id": "attributes",
+        "$schema_version": "1.0.0",
+        "firm_type": [],
+        "focus": [],
+        "loan_structure": [],
+        "accept_multiple_values": {"firm_type": True, "focus": True, "loan_structure": True},
+        "applies_when": {
+            "loan_structure": {"focus": {"contains_any": ["commercial_real_estate"]}},
+        },
     }
     mocks["get_raw_catalog"].return_value = raw_catalog_with_condition
     return mocks
 
 
-def test_loan_type_written_when_focus_is_cre(tmp_path):
-    """When focus contains 'commercial_real_estate', loan_type changes must be written."""
+def test_loan_structure_written_when_focus_is_cre(tmp_path):
+    """When focus contains 'commercial_real_estate', loan_structure changes must be written."""
     md_file = _write_loan_stub_file(tmp_path, focus=["commercial_real_estate"])
     mocks = _build_loan_mocks()
 
@@ -472,11 +476,11 @@ def test_loan_type_written_when_focus_is_cre(tmp_path):
 
     mocks["sanitizer_cls"]._write_metadata.assert_called_once()
     _, written_meta = mocks["sanitizer_cls"]._write_metadata.call_args[0]
-    assert written_meta["loan_type"] == ["bridge", "construction"]
+    assert written_meta["loan_structure"] == ["senior", "mezz"]
 
 
-def test_loan_type_excluded_when_focus_is_not_cre(tmp_path):
-    """When focus does not include 'commercial_real_estate', loan_type must not be written."""
+def test_loan_structure_excluded_when_focus_is_not_cre(tmp_path):
+    """When focus does not include 'commercial_real_estate', loan_structure must not be written."""
     md_file = _write_loan_stub_file(tmp_path, focus=["technology", "healthcare"])
     mocks = _build_loan_mocks()
 
@@ -505,14 +509,14 @@ def test_loan_type_excluded_when_focus_is_not_cre(tmp_path):
     }):
         _llm_normalize_catalog_properties(md_file, api_key="sk-test", model="gpt-4o-mini")
 
-    # loan_type must NOT appear in the written metadata
+    # loan_structure must NOT appear in the written metadata
     mocks["sanitizer_cls"]._write_metadata.assert_called_once()
     _, written_meta = mocks["sanitizer_cls"]._write_metadata.call_args[0]
-    assert "loan_type" not in written_meta
+    assert "loan_structure" not in written_meta
 
 
-def test_loan_type_included_when_applies_when_map_empty(tmp_path):
-    """When the raw catalog has no applies_when entries, all LLM changes are kept."""
+def test_loan_structure_included_when_applies_when_key_absent(tmp_path):
+    """When the raw catalog has no 'applies_when' key, all LLM changes are kept."""
     md_file = _write_loan_stub_file(tmp_path, focus=["technology"])
     mocks = _build_loan_mocks()
 
@@ -521,8 +525,15 @@ def test_loan_type_included_when_applies_when_map_empty(tmp_path):
         "focus": ["technology"],
     }
 
-    # Raw catalog returns no applies_when conditions
-    mocks["get_raw_catalog"].return_value = {"properties": []}
+    # Raw catalog with no applies_when key (mirrors catalog before the key is added)
+    mocks["get_raw_catalog"].return_value = {
+        "$ontology_id": "attributes",
+        "$schema_version": "1.0.0",
+        "firm_type": [],
+        "focus": [],
+        "loan_structure": [],
+        "accept_multiple_values": {"loan_structure": True},
+    }
 
     mock_llm_module = MagicMock()
     mock_llm_module.LLMClient = mocks["llm_cls"]
@@ -542,12 +553,12 @@ def test_loan_type_included_when_applies_when_map_empty(tmp_path):
     }):
         _llm_normalize_catalog_properties(md_file, api_key="sk-test", model="gpt-4o-mini")
 
-    # Without applies_when restrictions, loan_type from _normalize_properties is kept
+    # Without applies_when restrictions, loan_structure from _normalize_properties is kept
     _, written_meta = mocks["sanitizer_cls"]._write_metadata.call_args[0]
-    assert written_meta["loan_type"] == ["bridge", "construction"]
+    assert written_meta["loan_structure"] == ["senior", "mezz"]
 
 
-def test_loan_type_still_written_when_get_catalog_raises(tmp_path):
+def test_loan_structure_still_written_when_get_catalog_raises(tmp_path):
     """If get_catalog raises, applies_when_map stays empty and no changes are filtered out."""
     md_file = _write_loan_stub_file(tmp_path, focus=["technology"])
     mocks = _build_loan_mocks()
@@ -574,4 +585,4 @@ def test_loan_type_still_written_when_get_catalog_raises(tmp_path):
 
     # get_catalog failure must be swallowed; the LLM changes are still written
     _, written_meta = mocks["sanitizer_cls"]._write_metadata.call_args[0]
-    assert written_meta["loan_type"] == ["bridge", "construction"]
+    assert written_meta["loan_structure"] == ["senior", "mezz"]
