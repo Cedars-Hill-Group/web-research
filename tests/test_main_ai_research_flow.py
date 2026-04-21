@@ -3,23 +3,21 @@ import builtins
 from src import main
 
 
-def test_prompt_missing_ai_metadata_prompts_for_source_prop_type_and_loan_type(monkeypatch):
-    """focus and firm_type are no longer prompted — only source, prop_type, and loan_type."""
-    answers = iter(["referral", "Multifamily", "Bridge"])
+def test_prompt_missing_ai_metadata_prompts_for_source_and_prop_type(monkeypatch):
+    """focus, firm_type, loan_structure, and loan_type are LLM-classified — only source and prop_type are prompted."""
+    answers = iter(["referral", "Multifamily"])
 
     monkeypatch.setattr(builtins, "input", lambda _: next(answers))
 
     captured = {
         "source": None,
         "prop_type": None,
-        "loan_type": None,
     }
 
     resolved = main._prompt_missing_ai_metadata(captured)
 
     assert resolved["source"] == "referral"
     assert resolved["prop_type"] == "Multifamily"
-    assert resolved["loan_type"] == "Bridge"
 
 
 def test_prompt_missing_ai_metadata_source_only_required(monkeypatch):
@@ -37,14 +35,12 @@ def test_prompt_missing_ai_metadata_source_only_required(monkeypatch):
     captured = {
         "source": None,
         "prop_type": None,
-        "loan_type": None,
     }
 
     resolved = main._prompt_missing_ai_metadata(captured)
 
     assert resolved["source"] == "newsletter"
     assert resolved["prop_type"] is None
-    assert resolved["loan_type"] is None
     # Confirm that no firm_type or focus prompt was issued
     assert not any("firm" in p.lower() for p in prompts_seen)
     assert not any("focus" in p.lower() for p in prompts_seen)
@@ -54,7 +50,7 @@ def test_prompt_missing_ai_metadata_blank_source_leaves_none(monkeypatch):
     """Pressing Enter for source leaves it as None."""
     monkeypatch.setattr(builtins, "input", lambda _: "")
 
-    captured = {"source": None, "prop_type": None, "loan_type": None}
+    captured = {"source": None, "prop_type": None}
     resolved = main._prompt_missing_ai_metadata(captured)
 
     assert resolved["source"] is None
