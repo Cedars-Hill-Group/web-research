@@ -4,7 +4,7 @@ from src import main
 
 
 def test_prompt_missing_ai_metadata_prompts_for_source_and_prop_type(monkeypatch):
-    """focus, firm_type, loan_structure, and loan_type are LLM-classified — only source and prop_type are prompted."""
+    """focus, firm_type, and loan_structure are LLM-classified — only source and prop_type are prompted."""
     answers = iter(["referral", "Multifamily"])
 
     monkeypatch.setattr(builtins, "input", lambda _: next(answers))
