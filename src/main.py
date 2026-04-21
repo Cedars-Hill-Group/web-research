@@ -127,6 +127,11 @@ def _llm_normalize_catalog_properties(
             pass
 
         full_catalog = get_attributes_catalog()
+        # These four fields are handled by this LLM normalization step.
+        # focus/firm_type are always classified; loan_structure/loan_type are
+        # conditionally included per their applies_when rules in the catalog
+        # (typically restricted to companies whose focus contains CRE values).
+        # Website identification and NAICS classification are handled separately.
         target_fields = {"focus", "firm_type", "loan_structure", "loan_type"}
         filtered_catalog = AttributesCatalog(
             properties=[p for p in full_catalog.properties if p.field in target_fields]

@@ -171,18 +171,26 @@ def test_llm_normalize_catalog_properties_writes_normalized_fields(tmp_path):
     assert written_meta["focus"] == ["real_estate"]
 
 
-def test_llm_normalize_catalog_properties_filters_catalog_to_focus_and_firm_type(tmp_path):
-    """Only the 'focus' and 'firm_type' properties should be passed to CompanySanitizer."""
+def test_llm_normalize_catalog_properties_filters_catalog_to_target_fields(tmp_path):
+    """Only target fields (focus, firm_type, loan_structure, loan_type) pass through; others are dropped."""
     md_file = _write_stub_file(tmp_path)
     mocks = _build_mock_imports()
 
-    # The catalog has both firm_type and focus; after filtering, both should remain.
-    # Add a third property (e.g. 'naics_code') that must be filtered out.
-    extra_prop = MagicMock()
-    extra_prop.field = "naics_code"
+    # Build a catalog that contains all four target fields plus two that must be filtered out.
+    loan_structure_prop = MagicMock()
+    loan_structure_prop.field = "loan_structure"
+    loan_type_prop = MagicMock()
+    loan_type_prop.field = "loan_type"
+    naics_prop = MagicMock()
+    naics_prop.field = "naics_code"
+    website_prop = MagicMock()
+    website_prop.field = "website"
     mocks["mock_catalog"].properties = [
-        *mocks["mock_catalog"].properties,
-        extra_prop,
+        *mocks["mock_catalog"].properties,  # firm_type, focus
+        loan_structure_prop,
+        loan_type_prop,
+        naics_prop,
+        website_prop,
     ]
 
     filtered_catalog_arg = None
@@ -213,9 +221,11 @@ def test_llm_normalize_catalog_properties_filters_catalog_to_focus_and_firm_type
 
     assert filtered_catalog_arg is not None
     field_names = {p.field for p in filtered_catalog_arg}
-    assert field_names == {"focus", "firm_type"}, (
-        f"Expected only 'focus' and 'firm_type', got {field_names!r}"
+    assert field_names == {"focus", "firm_type", "loan_structure", "loan_type"}, (
+        f"Unexpected filtered field set: {field_names!r}"
     )
+    assert "naics_code" not in field_names
+    assert "website" not in field_names
 
 
 def test_llm_normalize_catalog_properties_noop_when_no_changes(tmp_path):
