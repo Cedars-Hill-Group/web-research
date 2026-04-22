@@ -48,15 +48,15 @@ def _check_applies_when(
     "always applies".
 
     This convention is designed to be stored in the ontology-core attributes
-    catalog alongside each
-    :class:`~data_platform.ontology_adapter.CatalogProperty` so that branching
-    logic is declarative and data-driven rather than hard-coded in consuming
-    applications.  For example, to restrict ``loan_type`` to companies whose
-    ``focus`` includes ``"commercial_real_estate"``::
+    catalog as a top-level ``"applies_when"`` key, mapping each field name to
+    its condition dict, so that branching logic is declarative and data-driven
+    rather than hard-coded in consuming applications.  For example, to restrict
+    ``loan_type`` to companies whose ``firm_type`` includes ``"lender"``::
 
         {
-          "field": "loan_type",
-          "applies_when": {"focus": {"contains_any": ["commercial_real_estate"]}}
+          "applies_when": {
+            "loan_type": {"firm_type": {"contains_any": ["lender"]}}
+          }
         }
 
     Adding a new conditional property therefore requires only a catalog change
