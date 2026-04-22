@@ -85,12 +85,11 @@ def _llm_normalize_catalog_properties(
     Uses the same LLM classification prompts as
     :class:`~data_platform.actions.sanitize_company.CompanySanitizer` to:
 
-    1. Select catalog-normalized values for ``focus``, ``firm_type``, and
-       ``loan_structure`` metadata fields.  ``loan_structure`` is only written
-       when the company's ``focus`` satisfies the ``applies_when`` condition
-       stored in the ontology-core catalog (e.g. ``focus`` must contain
-       ``"commercial_real_estate"``).  ``loan_type`` does not exist in the
-       current catalog and is therefore not targeted.
+    1. Select catalog-normalized values for ``focus``, ``firm_type``,
+       ``loan_structure``, and ``loan_type`` metadata fields.
+       ``loan_structure`` and ``loan_type`` are only written when the company's
+       ``firm_type`` satisfies the ``applies_when`` condition stored in the
+       ontology-core catalog (e.g. ``firm_type`` must contain ``"lender"``).
     2. Assign NAICS sector/industry codes (``naics_code``, ``naics_title``,
        ``naics_sector_code``, ``naics_sector_title``) via a separate LLM call.
 
@@ -131,12 +130,11 @@ def _llm_normalize_catalog_properties(
             pass
 
         full_catalog = get_attributes_catalog()
-        # focus/firm_type are always classified; loan_structure is conditionally
-        # included per its applies_when rule in the catalog (restricted to companies
-        # whose focus contains a CRE value).  loan_type does not exist as a catalog
-        # field — loan_structure is the canonical ontology-core property for debt
-        # structure classification.  Website and NAICS are handled separately.
-        target_fields = {"focus", "firm_type", "loan_structure"}
+        # focus/firm_type are always classified; loan_structure and loan_type are
+        # conditionally included per their applies_when rules in the catalog
+        # (both restricted to companies whose firm_type contains "lender").
+        # Website and NAICS are handled separately.
+        target_fields = {"focus", "firm_type", "loan_structure", "loan_type"}
         filtered_catalog = AttributesCatalog(
             properties=[p for p in full_catalog.properties if p.field in target_fields]
         )
