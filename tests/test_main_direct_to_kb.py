@@ -51,8 +51,8 @@ class TestInsertUnderHeading:
         body = "## basic underwriting\n\n"
         result = _insert_under_heading(body, "Basic Underwriting", "Data.")
         assert "Data." in result
-        # Should NOT create a second heading
-        assert result.count("## ") == 1 or result.count("## basic underwriting") >= 1
+        # The existing heading was matched, so no new ## heading should be added
+        assert result.count("## ") == 1
 
 
 # ---------------------------------------------------------------------------
