@@ -510,10 +510,26 @@ class CompanyResearchPipeline:
         """Return available schema classes configured for this pipeline."""
         return _list_schemas(self._schemas_dir)
 
+    def find_website(self, company_name: str, context: str = "") -> dict[str, Any]:
+        """Run only the WebsiteAgent and return its result dict.
+
+        Useful when the caller needs the website URL before deciding whether to
+        proceed with full research (e.g. for KB entity resolution).
+
+        Args:
+            company_name: Name of the company to look up.
+            context:      Optional context string passed to the WebsiteAgent.
+
+        Returns:
+            Dict with ``website``, ``confidence``, and ``reasoning`` keys.
+        """
+        return self._website_agent.run(company_name, context)
+
     def run(
         self,
         company_name: str,
         schema_class: str | None = None,
+        website: str | None = None,
     ) -> dict[str, Any]:
         """Run the full research pipeline for *company_name*.
 
@@ -523,6 +539,10 @@ class CompanyResearchPipeline:
                 provided the ClassifierAgent is skipped entirely and the given
                 class is used directly.  Must match a directory name (or legacy
                 flat file stem) in *schemas_dir*.
+            website:      Pre-resolved website URL.  When provided the
+                WebsiteAgent step is skipped entirely and this URL is used
+                directly, saving one LLM call.  The URL is still normalised to
+                its homepage root before scraping.
 
         Returns:
             A dict with keys:
@@ -535,15 +555,23 @@ class CompanyResearchPipeline:
                                       when the classifier was skipped)
               - ``structured_output``: :class:`CompanyResearchOutput` Pydantic model
         """
-        # Step 1 — find the website
-        website_context = schema_class or ""
-        website_result = self._website_agent.run(company_name, website_context)
-        website_url = website_result.get("website", "")
-        # Normalise to canonical homepage root before scraping and storing so
-        # the URL in metadata always reflects the root domain, not a redirect
-        # target or deep-link path (fixes Issue #13).
-        if website_url:
-            website_url = _normalise_homepage_url(website_url)
+        # Step 1 — find the website (skip when a URL is pre-provided)
+        if website:
+            website_url = _normalise_homepage_url(website)
+            website_result: dict[str, Any] = {
+                "website": website_url,
+                "confidence": "pre-provided",
+                "reasoning": "Website URL provided directly; WebsiteAgent skipped.",
+            }
+        else:
+            website_context = schema_class or ""
+            website_result = self._website_agent.run(company_name, website_context)
+            website_url = website_result.get("website", "")
+            # Normalise to canonical homepage root before scraping and storing so
+            # the URL in metadata always reflects the root domain, not a redirect
+            # target or deep-link path (fixes Issue #13).
+            if website_url:
+                website_url = _normalise_homepage_url(website_url)
 
         # Step 2 — fetch website content (homepage + subpages)
         website_content = ""

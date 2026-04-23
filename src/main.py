@@ -9,12 +9,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from .openai_agent import CompanyResearchPipeline
+import yaml
+
+from .entity_resolution import find_best_match
+from .openai_agent import CompanyResearchPipeline, _load_template_for_class, _normalise_homepage_url
 from .config import load_config, resolve_storage_paths
 from .store import (
     append_to_list_field,
     company_dirs,
     default_metadata,
+    pretty_company_name_enhanced,
     safe_slug,
     update_metadata_in_files,
     write_markdown,
@@ -308,6 +312,231 @@ def _resolve_ai_focus(classifier_result: dict, schema_name: str | None) -> str |
     return None
 
 
+# ---------------------------------------------------------------------------
+# Direct-to-KB helpers (interactive mode 1)
+# ---------------------------------------------------------------------------
+
+def _insert_under_heading(body: str, heading: str, addition: str) -> str:
+    """Insert *addition* under a markdown heading, creating the heading if absent."""
+    if not addition.strip():
+        return body
+
+    lines = body.splitlines()
+    target_idx: int | None = None
+    for i, line in enumerate(lines):
+        stripped = line.lstrip("#").strip()
+        if stripped.lower() == heading.lower():
+            target_idx = i
+            break
+
+    addition_block = addition.strip()
+
+    if target_idx is None:
+        prefix = "\n\n" if body.strip() else ""
+        return f"{body.rstrip()}{prefix}## {heading}\n\n{addition_block}\n"
+
+    insert_at = target_idx + 1
+    while insert_at < len(lines) and lines[insert_at].strip() == "":
+        insert_at += 1
+
+    new_lines = lines[:insert_at] + ["", addition_block, ""] + lines[insert_at:]
+    return "\n".join(new_lines).strip() + "\n"
+
+
+def _kb_clean_company_filename(name: str, db_dir: Path) -> Path:
+    """Return a unique ``<name>.md`` path inside *db_dir*.
+
+    Applies the same Title-Case prettification used by the merge script so
+    file names in the KB are consistent regardless of how a company is added.
+    """
+    pretty = pretty_company_name_enhanced(name) or safe_slug(name)
+    pretty = re.sub(r'[<>:"/\\|?*]+', " ", pretty)
+    pretty = re.sub(r"\s+", " ", pretty).strip() or "Company"
+    idx = 1
+    while True:
+        suffix = "" if idx == 1 else f" {idx}"
+        path = db_dir / f"{pretty}{suffix}.md"
+        if not path.exists():
+            return path
+        idx += 1
+
+
+def _resolve_against_kb(
+    company_name: str,
+    website: str | None,
+    db_dir: Path,
+) -> tuple[Path | None, str | None]:
+    """Check whether *company_name* already exists in the KB and prompt the user.
+
+    Resolution is attempted in three tiers (same strategy as the merge script):
+
+    1. **Deterministic** — ``data-platform`` ``CompanyRepository`` matching by
+       website domain then normalised name (if the package is installed).
+    2. **Probabilistic** — splink / difflib fallback via
+       :func:`~src.entity_resolution.find_best_match`.
+    3. **Interactive** — the user confirms, creates, or skips.
+
+    Returns:
+        ``(matched_path, None)`` — company already in the KB; use existing file.
+        ``(None, new_name)``     — company is new; create a file with this name.
+        ``(None, None)``         — skip this company entirely.
+    """
+    existing = [p.stem for p in db_dir.glob("*.md")] if db_dir.exists() else []
+
+    if not existing:
+        print(f"  No existing KB entries found for '{company_name}'.")
+        resp = input("Create a new company entry? (Y/n): ").strip().lower()
+        if resp in {"", "y", "yes"}:
+            custom_name = input(
+                f"Enter company name for KB (or press Enter to use '{company_name}'): "
+            ).strip()
+            return (None, custom_name or company_name)
+        return (None, None)
+
+    # Tier 1: deterministic matching via data-platform CompanyRepository.
+    try:
+        from data_platform.knowledge_base.reader import KnowledgeBaseReader  # noqa: PLC0415
+        from data_platform.repositories.companies import CompanyRepository  # noqa: PLC0415
+        from data_platform.ontology_adapter import Company  # noqa: PLC0415
+
+        reader = KnowledgeBaseReader(db_dir.parent, folder_map={"company": db_dir.name})
+        repo = CompanyRepository()
+        for doc in reader.read_all(object_type="company"):
+            doc_name = str(doc.metadata.get("name") or doc.path.stem)
+            doc_ws = str(doc.metadata.get("website") or "")
+            repo.save(Company(id=doc.path.stem, name=doc_name, website=doc_ws or None))
+
+        candidate = Company(id="__probe__", name=company_name, website=website or None)
+        matched = repo.resolve(candidate)
+        if matched:
+            matched_file = db_dir / f"{matched.id}.md"
+            if matched_file.exists():
+                if website and matched.website:
+                    label = f"domain match ({matched.website})"
+                else:
+                    label = f"name match ({matched.name!r})"
+                confirm = input(
+                    f"Found {label} in KB: '{matched.id}'. Use it? (y/n): "
+                ).strip().lower()
+                if confirm == "y":
+                    return (matched_file, None)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Tier 2: probabilistic matching via splink / difflib.
+    best_name, prob = find_best_match(company_name, existing, threshold=0.75)
+    if best_name:
+        confirm = input(
+            f"Found similar company in KB: '{best_name}' (score={prob:.2f}). Use it? (y/n): "
+        ).strip().lower()
+        if confirm == "y":
+            return (db_dir / f"{best_name}.md", None)
+
+    # Tier 3: interactive — no automatic match found.
+    print(f"  No matching company found in KB for '{company_name}'.")
+    resp = input("Create a new company entry? (Y/n): ").strip().lower()
+    if resp in {"", "y", "yes"}:
+        custom_name = input(
+            f"Enter company name for KB (or press Enter to use '{company_name}'): "
+        ).strip()
+        return (None, custom_name or company_name)
+    return (None, None)
+
+
+def _write_research_direct_to_kb(
+    company: str,
+    result: ReportResult,
+    db_file: Path,
+    *,
+    schemas_dir: str | None = None,
+    sanitize: bool = False,
+    sanitize_api_key: str | None = None,
+    sanitize_model: str = "gpt-4o-mini",
+) -> None:
+    """Write an AI research result directly into a KB markdown file.
+
+    Creates or updates *db_file*:
+
+    * When the file does not yet exist, the schema-class template is used as
+      the starting structure (falling back to an empty body when no template
+      is found).
+    * The cleaned AI research text is inserted under the ``## Basic
+      Underwriting`` heading (the heading is created if absent).
+    * Minimal front-matter (``website``, ``schema``, ``date``) is written so
+      that the file is immediately valid.
+    * The ``CompanySanitizer`` LLM workflow is then called to populate or
+      normalise ``focus``, ``firm_type``, ``loan_structure``, ``loan_type``,
+      and NAICS codes — and to confirm / overwrite the ``website`` field.
+    """
+    schema_name = result.get("schema", "general")
+    website_from_body, _firm_type_from_body, cleaned_report = _extract_ai_report_field_lines(
+        result.get("report", "")
+    )
+    ai_website = website_from_body or result.get("website", "") or ""
+
+    # Load template for this schema class (if available).
+    template_content: str | None = None
+    if schemas_dir:
+        try:
+            template_content = _load_template_for_class(schemas_dir, schema_name)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Start from template (if present) or a blank body.
+    if template_content:
+        if template_content.startswith("---"):
+            parts = template_content.split("---", 2)
+            if len(parts) >= 3:
+                try:
+                    dst_meta: dict = yaml.safe_load(parts[1]) or {}
+                except yaml.YAMLError:
+                    dst_meta = {}
+                dst_body = parts[2]
+            else:
+                dst_meta = {}
+                dst_body = template_content
+        else:
+            dst_meta = {}
+            dst_body = template_content
+    else:
+        dst_meta = {}
+        dst_body = ""
+
+    # Set minimal front-matter; CompanySanitizer will normalise/fill other fields.
+    dst_meta["website"] = ai_website
+    dst_meta["schema"] = schema_name
+    if not dst_meta.get("date"):
+        dst_meta["date"] = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+
+    # Insert the cleaned research report under the "Basic Underwriting" heading.
+    if cleaned_report.strip():
+        dst_body = _insert_under_heading(dst_body, "Basic Underwriting", cleaned_report.strip())
+
+    # Write the file.
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    fm = yaml.safe_dump(dst_meta, sort_keys=False, allow_unicode=True)
+    db_file.write_text(f"---\n{fm}---\n{dst_body.lstrip()}", encoding="utf-8")
+    print(f"Report saved directly to KB: {db_file}")
+
+    # Call the CompanySanitizer LLM workflow to populate metadata.
+    if sanitize:
+        _try_sanitize_research_output(
+            db_file,
+            api_key=sanitize_api_key,
+            model=sanitize_model,
+        )
+    else:
+        _llm_normalize_catalog_properties(
+            db_file,
+            api_key=sanitize_api_key,
+            model=sanitize_model,
+        )
+
+
 def _load_companies_csv(path: str = "companies.csv") -> tuple[list[dict], list[str] | None]:
     """Load companies CSV rows and raw field names."""
     rows: list[dict] = []
@@ -417,17 +646,35 @@ def _save_report(
 
 def _run_interactive(
     pipeline: CompanyResearchPipeline,
-    source_dir: str,
+    db_dir: str,
     *,
+    schemas_dir: str | None = None,
     sanitize: bool = False,
     sanitize_api_key: str | None = None,
     sanitize_model: str = "gpt-4o-mini",
 ) -> list[str]:
-    """Run interactive single-company research loop."""
-    print("\n=== AI Research Mode (Interactive) ===")
-    print("This project now runs only on the OpenAI multi-agent research pipeline.\n")
+    """Run interactive single-company research loop, writing directly to the KB.
 
-    available_schemas = pipeline.list_schema_classes()
+    New workflow (no local staging):
+
+    1. Prompt for a company name.
+    2. Run the :class:`~src.openai_agent.WebsiteAgent` to find the company's
+       website (user may override the result).
+    3. Resolve the company against the KB using tiered entity matching.
+       - If the company already exists, report the existing file and loop.
+       - If new, proceed to research.
+    4. Run the full research pipeline (reusing the pre-found website URL so the
+       WebsiteAgent is not called twice).
+    5. Write the cleaned report directly into the KB under the
+       ``## Basic Underwriting`` heading.
+    6. Call the ``CompanySanitizer`` LLM workflow to normalise metadata fields
+       (``focus``, ``firm_type``, NAICS codes, etc.) and confirm the website.
+    """
+    print("\n=== AI Research Mode (Interactive) ===")
+    print("Companies are researched and written directly to the knowledge base.\n")
+
+    db_path = Path(db_dir)
+    db_path.mkdir(parents=True, exist_ok=True)
 
     processed_companies: list[str] = []
 
@@ -436,34 +683,66 @@ def _run_interactive(
         if company.lower() == "q":
             break
 
-        print(f"Available schema classes: {', '.join(available_schemas)}")
-        schema_class = input(
-            "Enter schema class for this company (or press Enter to auto-detect): "
-        ).strip() or None
+        # Step 1: Discover the company website.
+        print(f"\nFinding website for '{company}'…")
+        website_url = ""
+        try:
+            website_result = pipeline.find_website(company)
+            website_url = _normalise_homepage_url(website_result.get("website", "") or "")
+        except (RuntimeError, ValueError, OSError) as exc:
+            print(f"  Could not find website automatically: {exc}")
 
-        if schema_class and schema_class not in available_schemas:
-            print(f"Warning: '{schema_class}' is not a known schema class. Auto-detecting instead.")
-            schema_class = None
+        if website_url:
+            print(f"  Found website: {website_url}")
+            override = input("  Press Enter to accept, or type a different URL: ").strip()
+            if override:
+                website_url = _normalise_homepage_url(override)
+        else:
+            website_url = input("  Enter website URL (or press Enter to skip): ").strip()
+            if website_url:
+                website_url = _normalise_homepage_url(website_url)
 
+        # Step 2: Entity resolution against the KB.
+        matched_path, new_name = _resolve_against_kb(company, website_url or None, db_path)
+
+        if matched_path is None and new_name is None:
+            print(f"  Skipped: {company}")
+            continue
+
+        if matched_path is not None:
+            print(f"  Company already exists in KB: {matched_path.name}")
+            processed_companies.append(company)
+            another = input("Research another company? (y/n): ").strip().lower()
+            if another != "y":
+                break
+            continue
+
+        # Step 3: Research the new company (reuse the pre-found website).
         print(f"\nResearching '{company}'…")
         try:
-            result = pipeline.run(company, schema_class=schema_class)
+            result = pipeline.run(company, website=website_url or None)
         except (RuntimeError, ValueError, OSError) as exc:
-            print(f"Error during research: {exc}")
+            print(f"  Error during research: {exc}")
             continue
 
         _print_research_result(result)
 
-        save = input("Save report to markdown file? (y/n): ").strip().lower()
-        if _is_yes(save):
-            _save_report(
-                company,
-                result,
-                source_dir=source_dir,
-                sanitize=sanitize,
-                sanitize_api_key=sanitize_api_key,
-                sanitize_model=sanitize_model,
-            )
+        save = input("Save to knowledge base? (y/n): ").strip().lower()
+        if not _is_yes(save):
+            continue
+
+        # Step 4: Write directly to KB and run CompanySanitizer.
+        assert new_name is not None  # guaranteed by _resolve_against_kb logic
+        target_file = _kb_clean_company_filename(new_name, db_path)
+        _write_research_direct_to_kb(
+            new_name,
+            result,
+            target_file,
+            schemas_dir=schemas_dir,
+            sanitize=sanitize,
+            sanitize_api_key=sanitize_api_key,
+            sanitize_model=sanitize_model,
+        )
 
         processed_companies.append(company)
 
@@ -541,6 +820,7 @@ def run() -> None:
 
     storage = resolve_storage_paths("config.yaml")
     source_dir = str(storage["source_dir"])
+    database_dir = str(storage["database_dir"])
 
     # Load data-platform sanitisation config (Phase 6).
     cfg = load_config("config.yaml") if Path("config.yaml").exists() else {}
@@ -549,6 +829,7 @@ def run() -> None:
     oa_cfg = cfg.get("openai") or {}
     sanitize_api_key = oa_cfg.get("api_key") or None
     sanitize_model = str(oa_cfg.get("model", "gpt-4o-mini"))
+    schemas_dir = str(oa_cfg.get("schemas_dir") or "schemas")
 
     mode = input("Choose mode - (1) AI Interactive, (2) AI Batch from companies.csv: ").strip()
 
@@ -578,19 +859,21 @@ def run() -> None:
                     )
                 except (OSError, ValueError, RuntimeError) as exc:
                     print(f"Failed to update companies.csv: {exc}")
+
+        resp = input("\nRun merge tool to add markdown files to DB now? (y/n): ").strip().lower()
+        if _is_yes(resp):
+            subprocess.run([sys.executable, "scripts/merge_markdown_db.py", "--config", "config.yaml"], check=False)
     else:
         processed_companies = _run_interactive(
             pipeline,
-            source_dir,
+            database_dir,
+            schemas_dir=schemas_dir,
             sanitize=sanitize,
             sanitize_api_key=sanitize_api_key,
             sanitize_model=sanitize_model,
         )
         _print_processed_companies(processed_companies)
 
-    resp = input("\nRun merge tool to add markdown files to DB now? (y/n): ").strip().lower()
-    if _is_yes(resp):
-        subprocess.run([sys.executable, "scripts/merge_markdown_db.py", "--config", "config.yaml"], check=False)
 
 
 if __name__ == "__main__":
