@@ -524,21 +524,7 @@ class CompanyResearchPipeline:
         Returns:
             Cleaned-up markdown content string (no heading, no preamble).
         """
-        system_prompt = (
-            "You are a professional editor specializing in financial company research "
-            "reports. Your task is to clean up and condense the provided 'Basic "
-            "Underwriting' section for a company while strictly preserving all "
-            "factual content.\n\n"
-            "Rules:\n"
-            "- Retain EVERY fact, number, name, strategy, and data point from the "
-            "original.\n"
-            "- Do NOT add any new information that is not present in the original.\n"
-            "- Remove redundancy, fix grammar, and improve clarity and conciseness.\n"
-            "- Preserve all markdown formatting (lists, bold, tables, headings, "
-            "etc.).\n"
-            "- Output only the cleaned content — no preamble, explanation, or "
-            "section heading."
-        )
+        system_prompt = _load_prompt(self._prompts_dir, "summarize_existing_content.md")
         user_message = (
             f"Company: {company_name}\n\n"
             f"Existing 'Basic Underwriting' content to clean up:\n\n{existing_content}"

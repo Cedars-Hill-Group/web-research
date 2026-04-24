@@ -444,12 +444,20 @@ def _resolve_against_kb(
 
 
 def _extract_section_content(body: str, heading: str) -> str:
-    """Return the content under *heading* in *body*.
+    """Return the content under *heading* in *body*, including any sub-headings.
 
     Searches for a heading line (any level: ``#`` through ``######``) whose
-    text matches *heading* case-insensitively, then returns all text between
-    that heading and the next heading of equal or higher level (or EOF).
-    The heading line itself is **not** included in the return value.
+    text matches *heading* case-insensitively, then returns all lines between
+    that heading and the next heading of **equal or higher** document level
+    (i.e. the same number of ``#`` marks, or fewer) — or EOF.
+
+    Sub-headings that are *deeper* than the target (more ``#`` marks) are
+    considered part of the section and are always included in the result.
+    For example, if the target is ``## Basic Underwriting`` (level 2), any
+    ``###``, ``####``, etc. headings inside the section are returned together
+    with their content.
+
+    The target heading line itself is **not** included in the return value.
     Returns an empty string when the heading is absent or the section has no
     non-blank content.
     """
@@ -480,8 +488,12 @@ def _extract_section_content(body: str, heading: str) -> str:
 def _replace_section_content(body: str, heading: str, new_content: str) -> str:
     """Replace the content under *heading* in *body* with *new_content*.
 
-    The heading line itself is preserved; only the text between it and the
-    next sibling/parent heading (or EOF) is replaced.  When *heading* is
+    Everything between the target heading line and the next heading of
+    **equal or higher** document level (fewer or equal ``#`` marks) — or EOF
+    — is replaced with *new_content*.  This includes any sub-headings (deeper
+    ``#`` levels) that belong to the section.
+
+    The target heading line itself is preserved verbatim.  When *heading* is
     absent the heading is appended together with *new_content*.
     Returns *body* unchanged when *new_content* is blank.
     """

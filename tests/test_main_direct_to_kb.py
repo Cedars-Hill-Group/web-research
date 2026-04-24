@@ -343,6 +343,54 @@ class TestExtractSectionContent:
         assert "Point B" in result
         assert "Point C" in result
 
+    def test_includes_sub_headings_in_section(self):
+        """Sub-headings (deeper # level) are part of the section and must be returned."""
+        body = (
+            "## Basic Underwriting\n\n"
+            "Intro text.\n\n"
+            "### Team Background\n\n"
+            "Team details.\n\n"
+            "### Investment Strategy\n\n"
+            "Strategy details.\n\n"
+            "## Notes\n\nNote content.\n"
+        )
+        result = _extract_section_content(body, "Basic Underwriting")
+        assert "Intro text." in result
+        assert "### Team Background" in result
+        assert "Team details." in result
+        assert "### Investment Strategy" in result
+        assert "Strategy details." in result
+        # The sibling heading that follows must NOT be included
+        assert "Note content." not in result
+
+    def test_sub_headings_at_end_of_document(self):
+        """Sub-headings at the end of the document (no following sibling) are included."""
+        body = (
+            "## Overview\n\nIntro.\n\n"
+            "## Basic Underwriting\n\n"
+            "Body text.\n\n"
+            "### Detail\n\n"
+            "Detail text.\n"
+        )
+        result = _extract_section_content(body, "Basic Underwriting")
+        assert "Body text." in result
+        assert "### Detail" in result
+        assert "Detail text." in result
+
+    def test_parent_heading_stops_extraction(self):
+        """A level-1 heading following the target section terminates extraction."""
+        body = (
+            "## Basic Underwriting\n\n"
+            "BU content.\n\n"
+            "### Sub\n\nSub content.\n\n"
+            "# Top Level\n\nTop content.\n"
+        )
+        result = _extract_section_content(body, "Basic Underwriting")
+        assert "BU content." in result
+        assert "### Sub" in result
+        assert "Sub content." in result
+        assert "Top content." not in result
+
 
 # ---------------------------------------------------------------------------
 # _replace_section_content
@@ -401,6 +449,55 @@ class TestReplaceSectionContent:
         assert "Single line." in result
         assert "- A" not in result
         assert "Next stuff." in result
+
+    def test_replaces_section_including_sub_headings(self):
+        """Old sub-headings within the section are removed along with the rest of the old content."""
+        body = (
+            "## Basic Underwriting\n\n"
+            "Intro.\n\n"
+            "### Old Sub-section\n\n"
+            "Old sub content.\n\n"
+            "## Notes\n\nNote stuff.\n"
+        )
+        result = _replace_section_content(body, "Basic Underwriting", "New clean content.")
+        assert "New clean content." in result
+        assert "Intro." not in result
+        assert "### Old Sub-section" not in result
+        assert "Old sub content." not in result
+        # Sibling section must survive
+        assert "## Notes" in result
+        assert "Note stuff." in result
+
+    def test_new_content_with_sub_headings_is_preserved(self):
+        """When new_content itself contains sub-headings they appear under the section."""
+        body = "## Basic Underwriting\n\nOld.\n\n## Next\n\nNext.\n"
+        new_content = "Summary.\n\n### Team\n\nTeam info.\n\n### Strategy\n\nStrategy info."
+        result = _replace_section_content(body, "Basic Underwriting", new_content)
+        assert "Summary." in result
+        assert "### Team" in result
+        assert "Team info." in result
+        assert "### Strategy" in result
+        assert "Strategy info." in result
+        assert "Old." not in result
+        assert "## Next" in result
+        assert "Next." in result
+
+    def test_multiple_sub_heading_levels_replaced(self):
+        """Sub-headings nested several levels deep are all replaced."""
+        body = (
+            "## Basic Underwriting\n\n"
+            "Top.\n\n"
+            "### Level 3\n\nL3.\n\n"
+            "#### Level 4\n\nL4.\n\n"
+            "## Sibling\n\nSibling.\n"
+        )
+        result = _replace_section_content(body, "Basic Underwriting", "Fresh.")
+        assert "Fresh." in result
+        assert "Top." not in result
+        assert "### Level 3" not in result
+        assert "#### Level 4" not in result
+        assert "## Sibling" in result
+        assert "Sibling." in result
 
 
 # ---------------------------------------------------------------------------
