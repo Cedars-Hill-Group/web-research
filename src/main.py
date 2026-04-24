@@ -443,6 +443,219 @@ def _resolve_against_kb(
     return (None, None)
 
 
+def _extract_section_content(body: str, heading: str) -> str:
+    """Return the content under *heading* in *body*.
+
+    Searches for a heading line (any level: ``#`` through ``######``) whose
+    text matches *heading* case-insensitively, then returns all text between
+    that heading and the next heading of equal or higher level (or EOF).
+    The heading line itself is **not** included in the return value.
+    Returns an empty string when the heading is absent or the section has no
+    non-blank content.
+    """
+    lines = body.splitlines()
+    target_idx: int | None = None
+    target_level: int = 2
+
+    for i, line in enumerate(lines):
+        m = re.match(r"^(#{1,6})\s+(.+)$", line.rstrip())
+        if m and m.group(2).strip().lower() == heading.lower():
+            target_idx = i
+            target_level = len(m.group(1))
+            break
+
+    if target_idx is None:
+        return ""
+
+    end_idx = len(lines)
+    for i in range(target_idx + 1, len(lines)):
+        m = re.match(r"^(#{1,6})\s+", lines[i])
+        if m and len(m.group(1)) <= target_level:
+            end_idx = i
+            break
+
+    return "\n".join(lines[target_idx + 1 : end_idx]).strip()
+
+
+def _replace_section_content(body: str, heading: str, new_content: str) -> str:
+    """Replace the content under *heading* in *body* with *new_content*.
+
+    The heading line itself is preserved; only the text between it and the
+    next sibling/parent heading (or EOF) is replaced.  When *heading* is
+    absent the heading is appended together with *new_content*.
+    Returns *body* unchanged when *new_content* is blank.
+    """
+    if not new_content.strip():
+        return body
+
+    lines = body.splitlines()
+    target_idx: int | None = None
+    target_level: int = 2
+
+    for i, line in enumerate(lines):
+        m = re.match(r"^(#{1,6})\s+(.+)$", line.rstrip())
+        if m and m.group(2).strip().lower() == heading.lower():
+            target_idx = i
+            target_level = len(m.group(1))
+            break
+
+    if target_idx is None:
+        prefix = "\n\n" if body.strip() else ""
+        return f"{body.rstrip()}{prefix}## {heading}\n\n{new_content.strip()}\n"
+
+    end_idx = len(lines)
+    for i in range(target_idx + 1, len(lines)):
+        m = re.match(r"^(#{1,6})\s+", lines[i])
+        if m and len(m.group(1)) <= target_level:
+            end_idx = i
+            break
+
+    new_lines = (
+        lines[: target_idx + 1]
+        + ["", new_content.strip(), ""]
+        + lines[end_idx:]
+    )
+    return "\n".join(new_lines).strip() + "\n"
+
+
+def _crud_upsert_kb_file(file_path: Path) -> None:
+    """Upsert *file_path* into the data-platform knowledge base.
+
+    Reads the updated markdown file via ``KnowledgeBaseReader`` and
+    re-registers it through ``CompanyRepository.save`` so that the
+    data-platform's in-memory state reflects the latest content.  Fails
+    silently when ``data-platform`` is not installed or the call fails so
+    that the research workflow is never blocked by a storage-backend error.
+    """
+    try:
+        from data_platform.knowledge_base.reader import KnowledgeBaseReader  # noqa: PLC0415
+        from data_platform.repositories.companies import CompanyRepository  # noqa: PLC0415
+        from data_platform.ontology_adapter import Company  # noqa: PLC0415
+    except ImportError:
+        return
+
+    try:
+        reader = KnowledgeBaseReader(
+            file_path.parent.parent,
+            folder_map={"company": file_path.parent.name},
+        )
+        repo = CompanyRepository()
+        for doc in reader.read_all(object_type="company"):
+            if doc.path.resolve() == file_path.resolve():
+                doc_name = str(doc.metadata.get("name") or doc.path.stem)
+                doc_ws = str(doc.metadata.get("website") or "")
+                repo.save(Company(id=doc.path.stem, name=doc_name, website=doc_ws or None))
+                print(f"  Company upserted in data-platform: {file_path.stem}")
+                return
+    except Exception as exc:  # noqa: BLE001
+        print(f"  data-platform CRUD upsert skipped: {exc}")
+
+
+def _process_existing_company_in_kb(
+    company: str,
+    matched_path: Path,
+    pipeline: "CompanyResearchPipeline",
+    *,
+    website: str | None,
+    schemas_dir: str | None = None,
+    sanitize: bool = False,
+    sanitize_api_key: str | None = None,
+    sanitize_model: str = "gpt-4o-mini",
+) -> None:
+    """Update an existing KB entry for *company*.
+
+    Workflow:
+
+    1. Read the existing KB markdown file.
+    2. Extract the content under ``## Basic Underwriting``.
+
+       * **Content present** — summarise and clean it up with a focused LLM
+         call (all facts retained, improved clarity/conciseness) and ask the
+         user to confirm before replacing the section.
+       * **No content** — run the full research pipeline using the pre-found
+         website URL and ask the user to confirm before adding the output.
+
+    3. Update the file's front-matter: add or refresh the ``date_updated``
+       field to the current UTC timestamp.
+    4. Sanitise catalog-controlled metadata fields via ``CompanySanitizer``
+       (or the focused ``_llm_normalize_catalog_properties`` pass when full
+       sanitisation is disabled).
+    5. Upsert the file through the data-platform CRUD wrapper so that the
+       platform's registry stays in sync.
+    """
+    # --- Read existing file ---------------------------------------------------
+    raw = matched_path.read_text(encoding="utf-8")
+    if raw.startswith("---"):
+        parts = raw.split("---", 2)
+        if len(parts) >= 3:
+            try:
+                existing_meta: dict = yaml.safe_load(parts[1]) or {}
+            except yaml.YAMLError:
+                existing_meta = {}
+            body = parts[2]
+        else:
+            existing_meta = {}
+            body = raw
+    else:
+        existing_meta = {}
+        body = raw
+
+    # --- Determine new content for "Basic Underwriting" ----------------------
+    existing_section = _extract_section_content(body, "Basic Underwriting")
+
+    if existing_section:
+        print("  Existing 'Basic Underwriting' content found. Summarizing…")
+        new_content = pipeline.summarize_existing_content(company, existing_section)
+        print("\n--- Summarized Content ---")
+        print(new_content)
+        print("--------------------------\n")
+        save = input(
+            "Replace existing 'Basic Underwriting' with this summary? (y/n): "
+        ).strip().lower()
+        if not _is_yes(save):
+            return
+    else:
+        print("  No 'Basic Underwriting' content found. Running research pipeline…")
+        try:
+            result = pipeline.run(company, website=website or None)
+        except (RuntimeError, ValueError, OSError) as exc:
+            print(f"  Error during research: {exc}")
+            return
+        _print_research_result(result)
+        save = input(
+            "Add this research to 'Basic Underwriting'? (y/n): "
+        ).strip().lower()
+        if not _is_yes(save):
+            return
+        _, _, new_content = _extract_ai_report_field_lines(result.get("report", ""))
+
+    # --- Update body ----------------------------------------------------------
+    body = _replace_section_content(body, "Basic Underwriting", new_content)
+
+    # --- Update metadata ------------------------------------------------------
+    existing_meta["date_updated"] = (
+        datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    )
+
+    # --- Write back -----------------------------------------------------------
+    fm = yaml.safe_dump(existing_meta, sort_keys=False, allow_unicode=True)
+    matched_path.write_text(f"---\n{fm}---\n{body.lstrip()}", encoding="utf-8")
+    print(f"  KB file updated: {matched_path}")
+
+    # --- Sanitize metadata ----------------------------------------------------
+    if sanitize:
+        _try_sanitize_research_output(
+            matched_path, api_key=sanitize_api_key, model=sanitize_model
+        )
+    else:
+        _llm_normalize_catalog_properties(
+            matched_path, api_key=sanitize_api_key, model=sanitize_model
+        )
+
+    # --- CRUD upsert ----------------------------------------------------------
+    _crud_upsert_kb_file(matched_path)
+
+
 def _write_research_direct_to_kb(
     company: str,
     result: ReportResult,
@@ -661,10 +874,16 @@ def _run_interactive(
     2. Run the :class:`~src.openai_agent.WebsiteAgent` to find the company's
        website (user may override the result).
     3. Resolve the company against the KB using tiered entity matching.
-       - If the company already exists, report the existing file and loop.
-       - If new, proceed to research.
-    4. Run the full research pipeline (reusing the pre-found website URL so the
-       WebsiteAgent is not called twice).
+
+       * **Existing company** — delegate to
+         :func:`_process_existing_company_in_kb` which either summarises the
+         existing "Basic Underwriting" section (when content is present) or
+         runs the full research pipeline to fill it (when empty), then
+         refreshes metadata and upserts via the data-platform CRUD wrapper.
+       * **New company** — proceed to step 4.
+
+    4. Run the full research pipeline (reusing the pre-found website URL so
+       the WebsiteAgent is not called twice).
     5. Write the cleaned report directly into the KB under the
        ``## Basic Underwriting`` heading.
     6. Call the ``CompanySanitizer`` LLM workflow to normalise metadata fields
@@ -710,7 +929,18 @@ def _run_interactive(
             continue
 
         if matched_path is not None:
+            # Existing company — update the KB entry in-place.
             print(f"  Company already exists in KB: {matched_path.name}")
+            _process_existing_company_in_kb(
+                company,
+                matched_path,
+                pipeline,
+                website=website_url or None,
+                schemas_dir=schemas_dir,
+                sanitize=sanitize,
+                sanitize_api_key=sanitize_api_key,
+                sanitize_model=sanitize_model,
+            )
             processed_companies.append(company)
             another = input("Research another company? (y/n): ").strip().lower()
             if another != "y":
@@ -732,7 +962,7 @@ def _run_interactive(
             continue
 
         # Step 4: Write directly to KB and run CompanySanitizer.
-        assert new_name is not None  # guaranteed by _resolve_against_kb logic
+        assert new_name is not None, "Expected new_name from _resolve_against_kb when matched_path is None"
         target_file = _kb_clean_company_filename(new_name, db_path)
         _write_research_direct_to_kb(
             new_name,
